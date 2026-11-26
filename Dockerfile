@@ -51,12 +51,13 @@ RUN apt-get update \
 # direktori ini di-chown di image supaya volume baru mewarisi kepemilikannya.
 RUN groupadd --gid 10001 app \
  && useradd  --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app \
- && mkdir -p /app/data \
+ && mkdir -p /app/data /app/static \
  && chown -R 10001:10001 /app
 
 WORKDIR /app
 
 COPY --from=builder --chown=10001:10001 /out/btc-cycle-radar /usr/local/bin/btc-cycle-radar
+COPY --chown=10001:10001 frontend/ /app/static/
 
 # Nilai default; bisa dioverride lewat compose / `docker run -e`.
 # DATABASE_URL relatif terhadap WORKDIR (/app) -> file di /app/data.
@@ -65,7 +66,7 @@ ENV BIND_ADDR=0.0.0.0:8099 \
     BOOTSTRAP_START=2010-07-01 \
     MIN_REQUIRED_CANDLES=4500 \
     AUTO_BOOTSTRAP=true \
-    STATIC_DIR= \
+    STATIC_DIR=/app/static \
     RUST_LOG=btc_cycle_radar=info,sqlx=warn,axum=info,tower_http=info
 
 EXPOSE 8099

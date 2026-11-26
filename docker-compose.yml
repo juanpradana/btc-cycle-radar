@@ -21,6 +21,7 @@ x-app-environment: &app-environment
   BOOTSTRAP_START: ${BOOTSTRAP_START:-2010-07-01}
   MIN_REQUIRED_CANDLES: ${MIN_REQUIRED_CANDLES:-4500}
   AUTO_BOOTSTRAP: ${AUTO_BOOTSTRAP:-true}
+  STATIC_DIR: ${STATIC_DIR:-/app/static}
   # Semua API key opsional: sistem tetap berfungsi penuh untuk indikator
   # berbasis OHLCV + CoinMetrics Community tanpa key apapun.
   BGEOMETRICS_API_KEY: ${BGEOMETRICS_API_KEY:-}

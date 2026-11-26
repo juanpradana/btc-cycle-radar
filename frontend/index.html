@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b1020">
+<title>BTC Cycle Radar — Dashboard Valuasi Siklus Panjang Bitcoin</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh; padding: 1.5rem;
+    background: radial-gradient(ellipse at 50% 0%, #16204a 0%, #0b1020 60%);
+    color: #e7ecff;
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 1.5rem; }
+  h1 { font-size: 1.7rem; letter-spacing: 0.02em; }
+  .subtitle { color: #8ab4ff; font-size: 0.85rem; margin-top: 0.3rem; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    padding: 0.25rem 0.6rem; border-radius: 999px;
+    font-size: 0.65rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .badge-score { background: rgba(255,196,0,0.15); color: #ffd166; }
+  .badge-zone { background: rgba(34,197,94,0.15); color: #4ade80; }
+  .badge-trend { background: rgba(239,68,68,0.15); color: #fca5a5; }
+  .badge-trend.bear { background: rgba(239,68,68,0.15); color: #fca5a5; }
+  .badge-trend.bull { background: rgba(34,197,94,0.15); color: #4ade80; }
+  .badge-trend.neutral { background: rgba(59,130,246,0.15); color: #93c5fd; }
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1rem; margin-bottom: 1.5rem;
+  }
+  .card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 1rem;
+    padding: 1rem 1.25rem;
+    backdrop-filter: blur(8px);
+  }
+  .card h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: #8ab4ff; margin-bottom: 0.6rem; }
+  .metric { display: flex; justify-content: space-between; align-items: baseline; }
+  .metric-value { font-size: 2.2rem; font-weight: 700; letter-spacing: -0.02em; }
+  .metric-label { color: #a8b3d4; font-size: 0.8rem; }
+  .zone-buy { color: #4ade80; }
+  .zone-neutral { color: #93c5fd; }
+  .zone-sell { color: #fca5a5; }
+  .guide {
+    margin-top: 1rem; padding: 0.75rem 1rem;
+    background: rgba(59,130,246,0.08);
+    border: 1px solid rgba(59,130,246,0.15);
+    border-radius: 0.5rem;
+    font-size: 0.85rem; line-height: 1.5; color: #c7d2fe;
+  }
+  .guide strong { color: #93c5fd; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+  th, td { padding: 0.5rem 0.6rem; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  th { color: #8ab4ff; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.65rem; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  .tier { display: inline-block; width: 1.6rem; text-align: center; border-radius: 0.3rem; font-weight: 700; font-size: 0.6rem; }
+  .tier-S { background: #ffd166; color: #1a1a1a; }
+  .tier-A { background: #4ade80; color: #1a1a1a; }
+  .tier-B { background: #8ab4ff; color: #1a1a1a; }
+  .tier-C { background: #a8b3d4; color: #1a1a1a; }
+  .cat { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.55rem; font-weight: 600; text-transform: uppercase; }
+  .cat-on_chain_psychology { background: rgba(239,68,68,0.2); color: #fca5a5; }
+  .cat-long_term_technical { background: rgba(34,197,94,0.2); color: #4ade80; }
+  .cat-mathematical_cycle { background: rgba(255,196,0,0.2); color: #ffd166; }
+  .cat-intermarket_timing { background: rgba(59,130,246,0.2); color: #93c5fd; }
+  .triggered { color: #4ade80; font-weight: 600; }
+  .not-triggered { color: #a8b3d4; }
+  .missing { color: #fca5a5; font-style: italic; }
+  .refresh-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.05);
+    font-size: 0.75rem; color: #8ab4ff;
+  }
+  .btn {
+    background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3);
+    color: #93c5fd; padding: 0.4rem 0.8rem; border-radius: 0.4rem;
+    font-size: 0.7rem; cursor: pointer; transition: background 0.2s;
+  }
+  .btn:hover { background: rgba(59,130,246,0.3); }
+  .error { color: #fca5a5; padding: 1rem; text-align: center; }
+  .loading { text-align: center; color: #8ab4ff; padding: 2rem; }
+  .hidden { display: none !important; }
+  .cat-weights {
+    display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem;
+  }
+  .cat-weight-item {
+    display: flex; align-items: center; gap: 0.3rem;
+    padding: 0.2rem 0.5rem; border-radius: 0.3rem;
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05);
+    font-size: 0.7rem;
+  }
+  .cat-weight-color { width: 0.6rem; height: 0.6rem; border-radius: 0.15rem; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>BTC Cycle Radar</h1>
+    <div class="subtitle">Dashboard intelijen & valuasi siklus panjang Bitcoin</div>
+  </header>
+
+  <div id="loading" class="loading">Memuat data valuasi…</div>
+  <div id="error" class="error hidden"></div>
+
+  <div id="dashboard" class="hidden">
+    <div class="card-grid">
+      <div class="card">
+        <h2>Skor Valuasi</h2>
+        <div class="metric">
+          <span class="metric-label">Composite</span>
+          <span id="scoreVal" class="metric-value">—</span>
+        </div>
+        <div style="margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <span id="badgeScore" class="badge badge-score">—</span>
+          <span id="badgeZone" class="badge badge-zone">—</span>
+          <span id="badgeTrend" class="badge badge-trend">—</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Harga Spot</h2>
+        <div class="metric">
+          <span class="metric-label">BTC/USD</span>
+          <span id="spotVal" class="metric-value">—</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Regime & Zona</h2>
+        <div class="metric">
+          <span class="metric-label">Regime</span>
+          <span id="regimeVal" class="metric-value" style="font-size:1.1rem;">—</span>
+        </div>
+        <div class="metric" style="margin-top:0.3rem;">
+          <span class="metric-label">Zona</span>
+          <span id="zoneVal" class="metric-value" style="font-size:1.1rem;">—</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Trigger</h2>
+        <div class="metric">
+          <span class="metric-label">BUY</span>
+          <span id="buyCount" class="metric-value" style="font-size:1.5rem;color:#4ade80;">—</span>
+        </div>
+        <div class="metric" style="margin-top:0.3rem;">
+          <span class="metric-label">TOP</span>
+          <span id="topCount" class="metric-value" style="font-size:1.5rem;color:#fca5a5;">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Panduan Aksi</h2>
+      <div id="guideBox" class="guide">—</div>
+    </div>
+
+    <div class="card">
+      <h2>Bobot Kategori</h2>
+      <div id="catWeights" class="cat-weights"></div>
+    </div>
+
+    <div class="card">
+      <h2>Registry 19 Indikator</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th><th>Nama</th><th>Kategori</th><th>Tier</th><th>Bobot</th>
+              <th style="text-align:right;">Value</th><th style="text-align:right;">Threshold</th><th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="indicatorBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Indikator Hilang</h2>
+      <div id="missingList" style="font-size:0.8rem;color:#a8b3d4;">—</div>
+    </div>
+
+    <div class="refresh-bar">
+      <span>Data evaluasi: <span id="asOf">—</span> (akhir data DB)</span>
+      <button id="refreshBtn" class="btn">Segarkan</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+
+async function fetchJSON(path) {
+  const res = await fetch(path, { headers: { 'Accept': 'application/json' } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function fmtNum(n, dp = 2) {
+  if (n === null || n === undefined) return '—';
+  return Number(n).toLocaleString('id-ID', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+}
+
+function tierClass(t) { return 'tier-' + (t || 'C'); }
+function catClass(c) { return 'cat-' + c; }
+
+function renderValuation(v) {
+  document.getElementById('scoreVal').textContent = fmtNum(v.valuation_score, 2);
+  document.getElementById('badgeScore').textContent = 'Skor ' + fmtNum(v.valuation_score, 1);
+  document.getElementById('spotVal').textContent = '$' + fmtNum(v.spot_price, 2);
+  document.getElementById('regimeVal').textContent = v.trend_regime || '—';
+  document.getElementById('zoneVal').textContent = v.current_zone || '—';
+  document.getElementById('buyCount').textContent = v.triggered_buy_count ?? '—';
+  document.getElementById('topCount').textContent = v.triggered_top_count ?? '—';
+  document.getElementById('asOf').textContent = v.as_of || '—';
+
+  const zone = (v.current_zone || '').toLowerCase();
+  const badgeZone = document.getElementById('badgeZone');
+  badgeZone.textContent = v.current_zone || '—';
+  badgeZone.className = 'badge ' + (zone.includes('buy') ? 'badge-zone' : zone.includes('sell') ? 'badge-zone' : 'badge-zone');
+  badgeZone.style.background = zone.includes('buy') ? 'rgba(34,197,94,0.15)' : zone.includes('sell') ? 'rgba(239,68,68,0.15)' : 'rgba(59,130,246,0.15)';
+  badgeZone.style.color = zone.includes('buy') ? '#4ade80' : zone.includes('sell') ? '#fca5a5' : '#93c5fd';
+
+  const trend = (v.trend_regime || '').toLowerCase();
+  const badgeTrend = document.getElementById('badgeTrend');
+  badgeTrend.textContent = v.trend_regime || '—';
+  badgeTrend.className = 'badge badge-trend ' + (trend.includes('bear') ? 'bear' : trend.includes('bull') ? 'bull' : 'neutral');
+
+  document.getElementById('guideBox').textContent = v.action_guide || '—';
+
+  // Category weights
+  const cw = document.getElementById('catWeights');
+  const colors = {
+    on_chain_psychology: '#ef4444',
+    long_term_technical: '#22c55e',
+    mathematical_cycle: '#facc15',
+    intermarket_timing: '#3b82f6'
+  };
+  cw.innerHTML = '';
+  for (const [cat, weight] of Object.entries(v.category_scores || {})) {
+    const item = document.createElement('span');
+    item.className = 'cat-weight-item';
+    const dot = document.createElement('span');
+    dot.className = 'cat-weight-color';
+    dot.style.background = colors[cat] || '#888';
+    item.append(dot, `${cat}: ${fmtNum(weight, 1)}%`);
+    cw.appendChild(item);
+  }
+}
+
+function renderIndicators(data) {
+  const tbody = document.getElementById('indicatorBody');
+  tbody.innerHTML = '';
+  (data.indicators || []).forEach(ind => {
+    const tr = document.createElement('tr');
+    const tier = ind.tier || 'C';
+    const cat = ind.category || '';
+    const triggered = ind.triggered;
+    tr.innerHTML = `
+      <td><code style="font-size:0.7rem;">${ind.id}</code></td>
+      <td>${ind.name}</td>
+      <td><span class="cat ${catClass(cat)}">${cat}</span></td>
+      <td><span class="tier ${tierClass(tier)}">${tier}</span></td>
+      <td>${fmtNum(ind.effective_weight, 1)}</td>
+      <td style="text-align:right;">${fmtNum(ind.value, 4)}</td>
+      <td style="text-align:right;">${fmtNum(ind.threshold, 4)}</td>
+      <td>${triggered ? '<span class="triggered">✓ BUY</span>' : ind.missing ? '<span class="missing">data tidak tersedia</span>' : '<span class="not-triggered">—</span>'}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  const missing = data.missing_indicators || [];
+  const ml = document.getElementById('missingList');
+  if (missing.length) {
+    ml.innerHTML = missing.map(m => `<span class="missing">${m}</span>`).join(', ');
+  } else {
+    ml.textContent = 'Semua indikator tersedia ✓';
+    ml.style.color = '#4ade80';
+  }
+}
+
+async function loadAll() {
+  try {
+    const [val, ind] = await Promise.all([
+      fetchJSON(`${API}/api/v1/valuation`),
+      fetchJSON(`${API}/api/v1/indicators`)
+    ]);
+    renderValuation(val);
+    renderIndicators(ind);
+  } catch (e) {
+    document.getElementById('error').textContent = 'Gagal memuat: ' + e.message;
+    document.getElementById('error').classList.remove('hidden');
+    console.error(e);
+  }
+}
+
+function showDashboard() {
+  document.getElementById('loading').classList.add('hidden');
+  document.getElementById('dashboard').classList.remove('hidden');
+}
+
+async function init() {
+  await loadAll();
+  showDashboard();
+}
+
+document.getElementById('refreshBtn').addEventListener('click', async () => {
+  document.getElementById('refreshBtn').textContent = 'Memuat…';
+  await loadAll();
+  document.getElementById('refreshBtn').textContent = 'Segarkan';
+});
+
+init();
+</script>
+</body>
+</html>

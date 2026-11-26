@@ -640,15 +640,25 @@ pub async fn load_market_input(
                 ));
             }
         }
+        // Provenance source: ambil dari DB (source terbaru untuk simbol ini)
+        // Jika series kosong → source = None (akan ditampilkan "missing" di UI)
+        let source = if !series.is_empty() {
+            crate::intermarket::intermarket_source(pool, &label.to_string())
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
         fields.push(FieldProvenance {
-            field: key.as_str(),
-            latest_date: latest.map(|d| d.format("%Y-%m-%d").to_string()),
-            staleness_days: staleness_days(as_of_date, latest),
-            tolerance_days: FRESHNESS_INTERMARKET_DAYS,
-            is_stale,
-            source: (!series.is_empty()).then(|| "derived:yahoo".to_string()),
-            value,
-        });
+                field: key.as_str(),
+                latest_date: latest.map(|d| d.format("%Y-%m-%d").to_string()),
+                staleness_days: staleness_days(as_of_date, latest),
+                tolerance_days: FRESHNESS_INTERMARKET_DAYS,
+                is_stale,
+                source,
+                value,
+            });
     }
     input.btc_gold_ratio_percentile = fields
         .iter()

@@ -4,19 +4,25 @@
 use btc_cycle_radar::config::AppConfig;
 use btc_cycle_radar::onchain::MetricFetchOutcome;
 use btc_cycle_radar::sync::{
-    bgeometrics_endpoints, build_sync_plan, summarize_metric_outcomes, yahoo_standard_symbols,
-    StalenessReport, SyncReport,
+    bgeometrics_endpoints, build_sync_plan, primary_intermarket_symbols,
+    summarize_metric_outcomes, yahoo_standard_symbols, StalenessReport, SyncReport,
 };
 use chrono::{NaiveDate, Utc};
 use std::collections::HashMap;
 
 #[test]
-fn test_yahoo_standard_symbols_contains_xau_gspc_dxy() {
+fn test_yahoo_standard_symbols_only_dxy_fallback() {
     let symbols = yahoo_standard_symbols();
-    assert_eq!(symbols.len(), 3);
-    assert!(symbols.iter().any(|(q, s)| *q == "GC=F" && *s == "XAU"));
-    assert!(symbols.iter().any(|(q, s)| *q == "^GSPC" && *s == "GSPC"));
-    assert!(symbols.iter().any(|(q, s)| *q == "DX-Y.NYB" && *s == "DXY"));
+    assert_eq!(symbols.len(), 1);
+    assert_eq!(symbols[0], ("DX-Y.NYB", "DXY"));
+}
+
+#[test]
+fn test_primary_intermarket_symbols_xau_gspc() {
+    let symbols = primary_intermarket_symbols();
+    assert_eq!(symbols.len(), 2);
+    assert!(symbols.contains(&"XAU"));
+    assert!(symbols.contains(&"GSPC"));
 }
 
 #[test]

@@ -151,6 +151,36 @@ async fn intermarket_upsert_is_idempotent() {
     assert!((series[0].close - 3552.0).abs() < 1e-6);
 }
 
+#[tokio::test]
+async fn intermarket_source_reflects_actual_storage() {
+    use btc_cycle_radar::intermarket::intermarket_source;
+
+    let (pool, _tmp) = fresh_pool().await;
+    let d = NaiveDate::from_ymd_opt(2026, 11, 24).expect("valid");
+
+    // Belum ada data → None
+    let none_src = intermarket_source(&pool, "XAU").await.expect("query");
+    assert_eq!(none_src, None);
+
+    // Upsert Binance PAXG
+    let gold = vec![IntermarketValue { date: d, close: 2645.0 }];
+    upsert_intermarket(&pool, "XAU", "binance_paxg", &gold)
+        .await
+        .expect("upsert paxg");
+
+    let xau_src = intermarket_source(&pool, "XAU").await.expect("query");
+    assert_eq!(xau_src, Some("binance_paxg".to_string()));
+
+    // Upsert FRED SP500
+    let spx = vec![IntermarketValue { date: d, close: 5918.54 }];
+    upsert_intermarket(&pool, "GSPC", "fred", &spx)
+        .await
+        .expect("upsert fred");
+
+    let gspc_src = intermarket_source(&pool, "GSPC").await.expect("query");
+    assert_eq!(gspc_src, Some("fred".to_string()));
+}
+
 #[test]
 fn find_closest_before_handles_weekends_and_holidays() {
     let d1 = NaiveDate::from_ymd_opt(2026, 11, 20).expect("valid"); // Jumat

@@ -176,17 +176,16 @@ pub fn should_derive_lth_realized_pl_ratio() -> bool {
 // Endpoint & sync plan (offline logic, tested by sync_pipeline_tests.rs)
 // ---------------------------------------------------------------------------
 
-/// Daftar simbol Yahoo Finance standar untuk intermarket.
-/// Return: `(query_symbol, internal_symbol)`.
-/// - Gold: `GC=F` → `XAU`
-/// - S&P 500: `^GSPC` → `GSPC`
-/// - US Dollar Index: `DX-Y.NYB` → `DXY`
+/// Daftar simbol intermarket yang di-fetch oleh sync.
+/// (query_symbol, internal_symbol) tetap untuk kompatibilitas dengan plan/test;
+/// worker intermarket memakai FRED SP500 + Binance PAXG (tidak Yahoo untuk XAU/GSPC).
 pub fn yahoo_standard_symbols() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("GC=F", "XAU"),
-        ("^GSPC", "GSPC"),
-        ("DX-Y.NYB", "DXY"),
-    ]
+    vec![("DX-Y.NYB", "DXY")]
+}
+
+/// Simbol internal yang di-fetch oleh sumber non-Yahoo.
+pub fn primary_intermarket_symbols() -> Vec<&'static str> {
+    vec!["XAU", "GSPC"]
 }
 
 /// Daftar endpoint BGeometrics yang terverifikasi (sama dengan `VERIFIED_METRICS`).
@@ -317,10 +316,15 @@ pub struct SyncPlan {
 /// Rule: BGeometrics tier gratis TIDAK butuh API key (endpoint `/v1/{slug}` & `/v1/{slug}/last`
 /// keduanya publik). Key hanya menaikkan tier (real-time, kuota lebih besar).
 pub fn build_sync_plan(config: &AppConfig) -> SyncPlan {
-    let intermarket = yahoo_standard_symbols()
-        .into_iter()
-        .map(|(q, s)| (q.to_string(), s.to_string()))
-        .collect();
+    let mut intermarket = vec![
+        ("binance:PAXGUSDT".to_string(), "XAU".to_string()),
+        ("fred:SP500".to_string(), "GSPC".to_string()),
+    ];
+    intermarket.extend(
+        yahoo_standard_symbols()
+            .into_iter()
+            .map(|(q, s)| (q.to_string(), s.to_string())),
+    );
     let bgeometrics_slugs: Vec<String> = bgeometrics_endpoints()
         .iter()
         .map(|(s, _m)| s.to_string())
@@ -499,27 +503,140 @@ pub async fn run_full_sync(
         }
     }
 
-    // ---- Yahoo Finance (always available, no API key) ----
-    let yahoo_client = super::intermarket::yahoo::YahooFinanceClient::default_client(http.clone());
-    for (query, symbol) in yahoo_standard_symbols() {
-        report.intermarket_symbols.push(symbol.into());
-        match yahoo_client.fetch_and_save(pool, query, symbol, "5y").await {
-            Ok(rows) => {
-                report.intermarket_rows.push((symbol.into(), rows));
-            }
-            Err(e) => {
-                // Log error tapi lanjutkan simbol lain
-                eprintln!("Yahoo fetch {symbol} ({query}) failed: {e}");
-                report.intermarket_rows.push((symbol.into(), 0));
-            }
+    // ---- Intermarket: Binance PAXG (gold) + FRED SP500 (S&P) + Yahoo DXY fallback ----
+    // Yahoo Finance memblokir IP cloud (HTTP 429 dari VPS) → primary source diganti
+    // ke endpoint publik yang tidak punya blocklist cloud:
+    //   XAU  → Binance PAXGUSDT daily klines (1 PAXG = 1 troy oz LBMA gold, 24/7)
+    //   GSPC → FRED series SP500 (CSV publik, tanpa API key)
+    // Yahoo tetap dipakai sebagai fallback terakhir per simbol (best-effort).
+    let intermarket = sync_intermarket(pool, http, true).await;
+    for (symbol, rows, err) in &intermarket {
+        report.intermarket_symbols.push(symbol.clone());
+        report.intermarket_rows.push((symbol.clone(), *rows));
+        if let Some(e) = err {
+            tracing::warn!("intermarket {symbol} gagal: {e}");
         }
     }
+    db::set_meta(
+        pool,
+        "last_intermarket_sync",
+        &Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    )
+    .await?;
 
     // ---- Total candle BTC untuk referensi ----
     let bounds = db::candle_bounds(pool).await?;
     report.btc_candles_total = bounds.count;
 
     Ok(report)
+}
+
+/// Sinkronisasi seluruh simbol intermarket dengan rantai primary → fallback.
+///
+/// Return: `(internal_symbol, rows_written, error_message)` per simbol.
+/// Error tidak pernah ditelan diam-diam: selalu dikembalikan ke pemanggil agar
+/// bisa dicatat ke `fetch_logs` dan dilaporkan transparan.
+pub async fn sync_intermarket(
+    pool: &SqlitePool,
+    http: &Client,
+    full_history: bool,
+) -> Vec<(String, usize, Option<String>)> {
+    let mut out: Vec<(String, usize, Option<String>)> = Vec::new();
+
+    // --- XAU: Binance PAXGUSDT primary ---
+    let paxg = crate::intermarket::binance_paxg::BinancePaxgClient::default_client(http.clone());
+    let xau_result = if full_history {
+        paxg.fetch_and_save_full_history(pool, None).await
+    } else {
+        paxg.fetch_and_save_incremental(pool, 30).await
+    };
+    match xau_result {
+        Ok(rows) if rows > 0 => out.push(("XAU".into(), rows, None)),
+        Ok(rows) => {
+            // Nol baris dianggap gagal → coba fallback Yahoo
+            tracing::warn!("Binance PAXG mengembalikan {rows} baris; fallback ke Yahoo GC=F");
+            out.push(("XAU".into(), rows, Some("binance_paxg: 0 rows".into())));
+        }
+        Err(e) => {
+            tracing::warn!("Binance PAXG gagal: {e}; fallback ke Yahoo GC=F");
+            out.push(("XAU".into(), 0, Some(format!("binance_paxg: {e}"))));
+        }
+    }
+
+    // --- GSPC: FRED SP500 primary ---
+    let fred = crate::intermarket::fred::FredClient::default_client(http.clone());
+    let spx_result = if full_history {
+        fred.fetch_and_save_full_history(pool).await
+    } else {
+        fred.fetch_and_save_incremental(pool, Utc::now().date_naive() - chrono::Duration::days(45))
+            .await
+    };
+    match spx_result {
+        Ok(rows) if rows > 0 => out.push(("GSPC".into(), rows, None)),
+        Ok(rows) => {
+            tracing::warn!("FRED SP500 mengembalikan {rows} baris; fallback ke Yahoo ^GSPC");
+            out.push(("GSPC".into(), rows, Some("fred: 0 rows".into())));
+        }
+        Err(e) => {
+            tracing::warn!("FRED SP500 gagal: {e}; fallback ke Yahoo ^GSPC");
+            out.push(("GSPC".into(), 0, Some(format!("fred: {e}"))));
+        }
+    }
+
+    // --- DXY + fallback Yahoo (best-effort) ---
+    let yahoo_client = crate::intermarket::yahoo::YahooFinanceClient::default_client(http.clone());
+    let yahoo_range = if full_history { "5y" } else { "1mo" };
+
+    // Fallback XAU/GSPC: hanya kalau primary gagal / nol baris.
+    let xau_needs_fallback = out
+        .iter()
+        .find(|(s, _, _)| s == "XAU")
+        .map(|(_, rows, err)| *rows == 0 || err.is_some())
+        .unwrap_or(true);
+    let gspc_needs_fallback = out
+        .iter()
+        .find(|(s, _, _)| s == "GSPC")
+        .map(|(_, rows, err)| *rows == 0 || err.is_some())
+        .unwrap_or(true);
+
+    for (query, symbol, needs) in [
+        ("GC=F", "XAU", xau_needs_fallback),
+        ("^GSPC", "GSPC", gspc_needs_fallback),
+        ("DX-Y.NYB", "DXY", true),
+    ] {
+        if !needs {
+            continue;
+        }
+        match yahoo_client
+            .fetch_and_save(pool, query, symbol, yahoo_range)
+            .await
+        {
+            Ok(rows) => {
+                if symbol == "DXY" {
+                    out.push((symbol.into(), rows, None));
+                } else if rows > 0 {
+                    // fallback berhasil: perbarui entri
+                    if let Some(entry) = out.iter_mut().find(|(s, _, _)| s == symbol) {
+                        entry.1 = rows;
+                    } else {
+                        out.push((symbol.into(), rows, None));
+                    }
+                } else if let Some(entry) = out.iter_mut().find(|(s, _, _)| s == symbol) {
+                    entry.2 = Some(format!("yahoo {query}: 0 rows"));
+                }
+            }
+            Err(e) => {
+                if symbol == "DXY" {
+                    out.push((symbol.into(), 0, Some(format!("yahoo {query}: {e}"))));
+                } else if let Some(entry) = out.iter_mut().find(|(s, _, _)| s == symbol) {
+                    let prev = entry.2.clone().unwrap_or_default();
+                    entry.2 = Some(format!("{prev}; yahoo {query}: {e}"));
+                }
+            }
+        }
+    }
+
+    out
 }
 
 /// Jalankan sinkronisasi inkremental (harian, untuk cron).
@@ -581,18 +698,21 @@ pub async fn run_incremental_sync(
         }
     }
 
-    // Yahoo incremental (30 hari)
-    let yahoo_client = super::intermarket::yahoo::YahooFinanceClient::default_client(http.clone());
-    for (query, symbol) in yahoo_standard_symbols() {
-        report.intermarket_symbols.push(symbol.into());
-        match yahoo_client.fetch_and_save(pool, query, symbol, "1mo").await {
-            Ok(rows) => report.intermarket_rows.push((symbol.into(), rows)),
-            Err(e) => {
-                eprintln!("Yahoo incremental {symbol} ({query}) failed: {e}");
-                report.intermarket_rows.push((symbol.into(), 0));
-            }
+    // Intermarket incremental (Binance PAXG + FRED SP500 + Yahoo fallback)
+    let intermarket = sync_intermarket(pool, http, false).await;
+    for (symbol, rows, err) in &intermarket {
+        report.intermarket_symbols.push(symbol.clone());
+        report.intermarket_rows.push((symbol.clone(), *rows));
+        if let Some(e) = err {
+            tracing::warn!("intermarket inkremental {symbol} gagal: {e}");
         }
     }
+    db::set_meta(
+        pool,
+        "last_intermarket_sync",
+        &Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    )
+    .await?;
 
     let bounds = db::candle_bounds(pool).await?;
     report.btc_candles_total = bounds.count;

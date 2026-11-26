@@ -1,14 +1,23 @@
 //! Connector pasar antar-aset (Intermarket) — Gold, S&P 500, DXY, dsb.
 //!
-//! Sumber utama: Yahoo Finance chart API (publik, tanpa kunci, tanpa batas wajar).
+//! Sumber utama:
+//! - **Gold (XAU)**: Binance PAXGUSDT daily klines (1 PAXG = 1 troy oz LBMA gold)
+//!   Primary: `binance_paxg` (public, no key, 24/7, no weekend gaps)
+//!   Fallback: Yahoo Finance `GC=F`
+//! - **S&P 500 (GSPC)**: FRED series `SP500` (public CSV, no key, daily business days)
+//!   Primary: `fred` (reliable, no cloud blocklist)
+//!   Fallback: Yahoo Finance `^GSPC`
+//! - **DXY**: Yahoo Finance `DX-Y.NYB` (fallback only, deprecated priority)
 //!
-//! Format respons (v8/finance/chart):
+//! Format respons Yahoo Finance chart API (v8/finance/chart):
 //! - `chart.result[0].meta.regularMarketPrice` — harga terbaru
 //! - `chart.result[0].timestamp[]` — epoch detik UTC
 //! - `chart.result[0].indicators.quote[0].close[]` — array close
 //! - Bila `close[i]` null → hari non-trading (weekend/libur), di-skip.
 
 pub mod yahoo;
+pub mod binance_paxg;
+pub mod fred;
 
 use anyhow::Result;
 use chrono::NaiveDate;
@@ -113,4 +122,20 @@ pub fn find_closest_before(
         .rev()
         .find(|v| v.date <= target)
         .map(|v| v.close)
+}
+
+/// Ambil source (prioritas terbaru) yang dipakai untuk simbol tertentu.
+/// Berguna untuk provenance di API — return `None` kalau simbol tidak ada.
+pub async fn intermarket_source(
+    pool: &SqlitePool,
+    symbol: &str,
+) -> Result<Option<String>> {
+    use sqlx::Row;
+    let row = sqlx::query(
+        "SELECT DISTINCT source FROM intermarket_daily WHERE symbol = ? ORDER BY updated_at DESC LIMIT 1",
+    )
+    .bind(symbol)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.get::<String, _>("source")))
 }

@@ -1,0 +1,44 @@
+# Rust / Cargo build artifacts
+/target/
+**/target/
+
+# SQLite databases, backups, wal/shm
+*.db
+*.db-shm
+*.db-wal
+*.db.bak*
+*.backup*
+data/*.db*
+data/*.backup*
+data/tmp/
+backend/data/*.db*
+backend/data/*.backup*
+backend/data/tmp/
+
+# Environment files with potential secrets
+.env
+.env.*
+!.env.example
+*.env
+*.key
+*.pem
+
+# Logs & temp dumps
+*.log
+*.err
+server.log
+backend/server.log
+backend/data/*.log
+backend/data/*.err
+backend/data/last_sync.*
+backend/data/bgeometrics_fill.log
+backend/data/bgeometrics_openapi.json
+backend/data/cm_catalog_btc.json
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~

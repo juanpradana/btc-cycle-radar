@@ -1,0 +1,7 @@
+# Toolchain lokal: host ini tidak punya MSVC Build Tools, jadi dipakai
+# toolchain Rust GNU + MinGW-w64 (gcc di D:\Hermes\toolchains\mingw64\bin).
+# Section ini hanya berlaku untuk target Windows-GNU; build di Linux/Docker
+# (target x86_64-unknown-linux-gnu) mengabaikannya.
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+ar = "x86_64-w64-mingw32-ar"

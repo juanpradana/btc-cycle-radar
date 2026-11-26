@@ -1,0 +1,62 @@
+{
+  "supply_in_profit": {
+    "recommendation": "ACQUIRE_FROM_FREE_BGEOMETRICS — Exact equivalent available at no cost via BGeometrics `/v1/profit-loss` (or `/v1/supply-in-profit-pct`). Add to VERIFIED_METRICS in bgeometrics.rs. No paid feed needed; free tier provides 4 years history, 8 req/hour, 15 req/day, 7-day delay. Glassnode/CryptoQuant require Professional subscriptions.",
+    "definition": "Percent Supply in Profit = 100 × (Supply in Profit) / (Total Circulating Supply). Supply in Profit = Σ (UTXO value × I(current_price > UTXO_creation_price)) — sum of BTC value for all UTXOs whose price at creation (last move) is below current price. A coin is 'in profit' if current price > price at last on-chain movement.",
+    "evidence": [
+      {
+        "url": "https://docs.glassnode.com/basic-api/endpoints/supply",
+        "quote": "**Definition.** The percentage of circulating supply in profit, meaning the share of existing coins whose price at the time they last moved was lower than the current price.\n\n**Interpretation.** A reading of 50% marks the crossing between profit-dominated and loss-dominated supply.\n\n**Notes.** For more information, see [Dissecting Bitcoin's Unrealised On-Chain Profit/Loss](https://medium.com/glassnode-insights/dissecting-bitcoins-unrealised-on-chain-profit-loss-73e735020c8d).\n\n[View in Studio](https://studio.glassnode.com/charts/supply.ProfitRelative?a=BTC)"
+      },
+      {
+        "url": "https://docs.glassnode.com/further-information/metric-guides/profit-loss-supply/percent-supply-in-profit",
+        "quote": "Percent Supply in Profit is calculated by dividing the absolute Supply in Profit by the total circulating supply and converting to a percentage.\n\n$$\n\\textrm{Percent Supply in Profit} = 100 \\cdot \\frac{\\textrm{Supply in Profit}}{\\textrm{Total Supply}}\n$$"
+      },
+      {
+        "url": "https://cryptoquant.mintlify.app/data-guide/utxo/profit-and-loss-supply",
+        "quote": "Supply in Profit =∑_u∈utxos value_u * I(price_u > price_created,u)\nSupply in Loss =∑_u∈utxos value_u * I(price_u < price_created,u)\nPercent Supply in Profit =100 * (Supply in Profit)/(Total Supply)\nPercent Supply in Loss =100 * (Supply in Loss)/(Total Supply)"
+      },
+      {
+        "url": "https://api.bitcoin-data.com/v3/api-docs",
+        "quote": "/v1/profit-loss: GET — % of BTC supply currently in profit. Parameters: day, startday, endday, page, size. Tag: Profit Loss. OperationId: getProfitLoss."
+      },
+      {
+        "url": "https://portal.bgeometrics.com/bguser/free-features.html",
+        "quote": "GET /v1/profit-loss — % of BTC supply currently in profit → /last · /csv\nGET /v1/supply-in-profit-pct — (listed in OpenAPI as supply-in-profit-pct) → /last · /csv\nAvailable endpoints — Free plan: All endpoints are served from bitcoin-data.com/v1/ and return the last 4 years of data. Each endpoint supports /last for the latest value, /csv to export as a CSV file, and optional query params ?day= , ?startday= , ?endday= . Free vs Advanced: Requests/hour 8 vs 200, Requests/day 15 vs 400, Historical data: Last 4 years vs Full history."
+      },
+      {
+        "url": "https://docs.glassnode.com/basic-api/api",
+        "quote": "The Glassnode API is available to **Professional subscribers**, with full access to the metrics, history, and resolutions included in your plan. **Advanced** subscribers have access to the more limited Light API. It's a more limited entry point built for automated and agentic workflows. Compared to the full Professional API, it: - is limited to 14 days of history, - is restricted to daily (1d) resolution, - is capped at 50 calls per day, and - does not support bulk endpoints."
+      }
+    ]
+  },
+  "lth_realized_pl_ratio": {
+    "recommendation": "COMPUTE_FROM_BGEOMETRICS_FREE_COMPONENTS — No direct LTH Realized P/L Ratio endpoint exists on any provider's free tier. Glassnode defines it as ema(LTH Realized Profit / LTH Realized Loss, 7) using entity-adjusted (account-based) metrics (Professional tier required). BGeometrics free tier exposes both components: `/v1/realized_profit_lth` and `/v1/realized_loss_lth` (also USD/BTC variants). Compute ratio = realized_profit_lth / realized_loss_lth in loader/engine; apply 7-day EMA if matching Glassnode smoothing. Add both component endpoints to VERIFIED_METRICS and derive in engine.",
+    "definition": "LTH Realized P/L Ratio = EMA_7( LTH Realized Profit / LTH Realized Loss ). LTH Realized Profit = Σ (BTC_amount × (price_at_spend − price_at_creation)) for all spent outputs where hold_time ≥ 155 days (logistic weighting, 10-day transition) and price_at_spend > price_at_creation. LTH Realized Loss = Σ (BTC_amount × (price_at_creation − price_at_spend)) for hold_time ≥ 155 days and price_at_spend < price_at_creation. Entity-adjusted: volume between same-entity addresses excluded. Glassnode Studio chart: btc-lth-realized-plratio.",
+    "evidence": [
+      {
+        "url": "https://studio.glassnode.com/charts/btc-lth-realized-plratio?a=BTC",
+        "quote": "**Definition.** The LTH Realized P/L Ratio is simply the ratio between the LTH Realized Profit and Realized Loss, plotted green while above 1.0 and red while below, with LTH-SOPR 🔵 overlaid for comparison and price in grey.\n\n**Technical.** The ratio is smoothed with a 7-day EMA and split at the 1.0 equilibrium level:\n- `LTH Realized P/L Ratio = ema(LTH Realized Profit / LTH Realized Loss, 7)` — green when >= 1, red when < 1\nBoth inputs are the entity-adjusted (account-based) realized profit and loss metrics. The overlay is the native LTH-SOPR metric."
+      },
+      {
+        "url": "https://docs.glassnode.com/basic-api/endpoints/indicators",
+        "quote": "/v1/metrics/indicators/realized_profit_lth_account_based — **Definition.** Entity-Adjusted Long-Term Holder Realized Profit is the entity-adjusted variant of Realized Profit for Long-Term Holders, denoting the total profit (in USD) of all moved coins whose price at their last movement was lower than the price at the current movement.\n\n**Technical.** Long- and Short-Term Holder supply is defined with respect to the entity's averaged purchasing date with weights given by a logistic function centered at an age of 155 days and a transition width of 10 days. Volume transferred between addresses owned by the same entity cluster is excluded... Entities are clusters of addresses estimated to be controlled by the same actor, identified through advanced heuristics and Glassnode's proprietary clustering algorithms."
+      },
+      {
+        "url": "https://docs.glassnode.com/basic-api/endpoints/indicators",
+        "quote": "/v1/metrics/indicators/realized_loss_lth_account_based — **Definition.** Entity-Adjusted Long-Term Holder Realized Loss is the entity-adjusted variant of Realized Loss for Long-Term Holders, denoting the total profit (in USD) of all moved coins whose price at their last movement was lower than the price at the current movement.\n\n**Technical.** Long- and Short-Term Holder supply is defined with respect to the entity's averaged purchasing date with weights given by a logistic function centered at an age of 155 days and a transition width of 10 days. Volume transferred between addresses owned by the same entity cluster is excluded..."
+      },
+      {
+        "url": "https://api.bitcoin-data.com/v3/api-docs",
+        "quote": "/v1/realized_profit_lth — GET, Tag: Realized Profit, OperationId: getRealizedProfitLth. Parameters: day, startday, endday, page, size.\n/v1/realized_loss_lth — GET, Tag: Realized Loss, OperationId: getRealizedLossLth. Parameters: day, startday, endday, page, size.\n/v1/realized-profit-loss-ratio — GET, Tag: Realized Profit Loss Ratio, OperationId: getRealizedProfitLossRatio (general all-holders ratio, NOT LTH-specific)."
+      },
+      {
+        "url": "https://portal.bgeometrics.com/bguser/free-features.html",
+        "quote": "GET /v1/realized_profit_lth — Realized profit — Long-Term Holders → /last · /csv\nGET /v1/realized_loss_lth — Realized loss — Long-Term Holders → /last · /csv\nGET /v1/realized-profit-loss-ratio — Realized Profit / Loss Ratio (general)\nAvailable endpoints — Free plan: All endpoints are served from bitcoin-data.com/v1/ and return the last 4 years of data. Each endpoint supports /last for the latest value, /csv to export as a CSV file, and optional query params ?day= , ?startday= , ?endday= . Free vs Advanced: Requests/hour 8 vs 200, Requests/day 15 vs 400, Historical data: Last 4 years vs Full history."
+      },
+      {
+        "url": "https://docs.glassnode.com/basic-api/api",
+        "quote": "The Glassnode API is available to **Professional subscribers**, with full access to the metrics, history, and resolutions included in your plan. **Advanced** subscribers have access to the more limited Light API... is limited to 14 days of history, is restricted to daily (1d) resolution, is capped at 50 calls per day, and does not support bulk endpoints."
+      }
+    ]
+  }
+}

@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: cargo test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./backend -> target"
+
+      # Wajib hijau: 129 tes (unit + integrasi). Tidak butuh DATABASE_URL
+      # karena schema di-embed saat compile dan tes memakai file temp.
+      - name: cargo test
+        run: cargo test --locked --all-targets
+
+  docker:
+    name: docker build + smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up BuildKit
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (Dockerfile multi-stage)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          tags: btc-cycle-radar:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verifikasi image (non-root, curl, binary)
+        run: |
+          set -euo pipefail
+          uid="$(docker run --rm --entrypoint id btc-cycle-radar:ci -u)"
+          echo "container uid = $uid"
+          test "$uid" = "10001"
+          docker run --rm --entrypoint sh btc-cycle-radar:ci -c \
+            'command -v curl && command -v btc-cycle-radar && ls -ld /app/data'
+
+      - name: Smoke test server (read-only rootfs, tmpfs /app/data)
+        run: |
+          set -euo pipefail
+          docker run -d --name radar \
+            --read-only \
+            --tmpfs /tmp:rw,size=64m \
+            --tmpfs /app/data:rw,size=256m,mode=1777 \
+            --security-opt no-new-privileges:true \
+            -e AUTO_BOOTSTRAP=false \
+            -e RUST_LOG=btc_cycle_radar=info \
+            -p 8099:8099 \
+            btc-cycle-radar:ci
+
+          ok=0
+          for i in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:8099/healthz; then ok=1; break; fi
+            sleep 2
+          done
+          echo
+          docker logs radar || true
+          test "$ok" = "1"
+
+          echo "--- /healthz ---"
+          curl -fsS http://127.0.0.1:8099/healthz
+          echo
+          echo "--- /api/v1/indicators (potongan) ---"
+          curl -fsS http://127.0.0.1:8099/api/v1/indicators | head -c 300
+          echo
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f radar || true

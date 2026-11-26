@@ -232,3 +232,45 @@ async fn test_score_history_prefers_materialized_table() {
     assert_eq!(pts[7]["spot_price"].as_f64(), Some(20_700.0));
     assert_eq!(pts[0]["current_zone"], "TestZone");
 }
+
+#[tokio::test]
+async fn test_indicator_history_endpoint_single() {
+    let (app, _tmp) = setup_chart_test(2500, 2000).await;
+
+    // Single-indicator GET bersifat read-only: tanpa materialisasi → points kosong (graceful).
+    let (status, val) = get_json(&app, "/api/v1/chart/indicator-history?id=nupl&step_days=30&limit=50").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(val["ok"], true);
+    assert_eq!(val["indicator_id"], "nupl");
+    assert!(val["points"].as_array().unwrap().is_empty());
+    assert_eq!(val["has_history"], false);
+}
+
+#[tokio::test]
+async fn test_indicator_history_endpoint_bulk() {
+    let (app, _tmp) = setup_chart_test(100, 50).await;
+
+    let (status, val) = get_json(&app, "/api/v1/chart/indicators-history?ids=nupl,ma_50w&step_days=30&limit=20").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(val["ok"], true);
+    let series = val["series"].as_array().unwrap();
+    assert_eq!(series.len(), 2);
+    for s in series {
+        assert!(s["indicator_id"].as_str().is_some());
+        assert!(s["points"].as_array().is_some());
+    }
+}
+
+#[tokio::test]
+async fn test_indicator_specs_endpoint() {
+    let (app, _tmp) = setup_chart_test(10, 5).await;
+
+    let (status, val) = get_json(&app, "/api/v1/chart/indicator-specs").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(val["ok"], true);
+    assert_eq!(val["count"], 19);
+    let indicators = val["indicators"].as_array().unwrap();
+    assert_eq!(indicators.len(), 19);
+    assert_eq!(indicators[0]["id"], "ma_50w");
+    assert_eq!(indicators[0]["rank"], 1);
+}

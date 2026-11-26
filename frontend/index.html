@@ -134,6 +134,20 @@
     font-size: 0.72rem; cursor: pointer; outline: none;
   }
   .chart-wrap { position: relative; width: 100%; height: 340px; margin-top: 0.5rem; }
+  .indicator-chart-toolbar { display:flex; flex-wrap:wrap; gap:.55rem 1rem; margin:.5rem 0 1rem; }
+  .indicator-toggle { display:inline-flex; align-items:center; gap:.4rem; padding:.3rem .55rem; border:1px solid rgba(255,255,255,.1); border-radius:.45rem; color:#cbd5e1; font-size:.72rem; cursor:pointer; transition:all .15s ease; }
+  .indicator-toggle:hover { border-color:rgba(96,165,250,.4); color:#e7ecff; }
+  .indicator-toggle.on { border-color:rgba(96,165,250,.6); background:rgba(59,130,246,.16); color:#dbeafe; font-weight:600; }
+  .indicator-toggle input { accent-color:#60a5fa; }
+  .indicator-chart-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:1rem; }
+  .indicator-chart-card { min-width:0; background:rgba(255,255,255,.025); border:1px solid rgba(255,255,255,.07); border-radius:.75rem; padding:.8rem; }
+  .indicator-chart-card h4 { font-size:.82rem; margin-bottom:.35rem; color:#e7ecff; font-weight:600; line-height:1.35; }
+  .indicator-chart-card .chart-wrap { height:230px; }
+  .indicator-status { font-size:.68rem; color:#94a3b8; margin-top:.35rem; display:flex; align-items:center; gap:.35rem; }
+  .indicator-status.detail { color:#64748b; font-size:.64rem; margin-top:.15rem; }
+  .indicator-status.error { color:#fca5a5; }
+  .indicator-status.stale { color:#fbbf24; }
+  .indicator-empty { color:#a8b3d4; font-size:.8rem; padding:.75rem 0; }
   .chart-legend-notes {
     display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.75rem;
     font-size: 0.7rem; color: #94a3b8; padding-top: 0.5rem;
@@ -279,6 +293,35 @@
         <span><span class="dot" style="background:rgba(74,222,128,0.4);"></span> 20–35 Buy Zone</span>
         <span><span class="dot" style="background:rgba(148,163,184,0.3);"></span> 35–75 Netral / Transisi</span>
         <span><span class="dot" style="background:rgba(239,68,68,0.4);"></span> 75–100 Euphoria</span>
+      </div>
+    </div>
+
+    <!-- Chart 4: Sinyal per Indikator (19 indikator, enable/disable) -->
+    <div class="chart-card" id="indicatorChartsCard">
+      <div class="chart-header">
+        <div class="chart-title-wrap">
+          <h3>Chart Sinyal per Indikator (19 Indikator)</h3>
+          <p>Pilih indikator mana yang ingin ditampilkan — satu chart per indikator, dari data historis riil di database</p>
+        </div>
+        <div class="chart-controls">
+          <div class="chart-btn-group">
+            <button class="chart-btn" onclick="setIndicatorPreset('all', this)">Semua</button>
+            <button class="chart-btn active" onclick="setIndicatorPreset('none', this)">Kosong</button>
+            <button class="chart-btn" onclick="setIndicatorPreset('buy', this)">Sinyal BUY</button>
+            <button class="chart-btn" onclick="setIndicatorPreset('top', this)">Sinyal TOP</button>
+          </div>
+          <div class="chart-btn-group">
+            <button class="chart-btn active" id="btnIndStep30" onclick="setIndicatorStep(30, this)">30 hari</button>
+            <button class="chart-btn" id="btnIndStep7" onclick="setIndicatorStep(7, this)">7 hari</button>
+          </div>
+        </div>
+      </div>
+      <div id="indicatorToggleBar" class="indicator-chart-toolbar">
+        <span class="indicator-empty">Memuat daftar indikator…</span>
+      </div>
+      <div id="indicatorChartGrid" class="indicator-chart-grid"></div>
+      <div id="indicatorChartNote" class="chart-legend-notes">
+        <span>Menampilkan deret skor 0–100 per indikator (100 = paling mendukung puncak siklus). Sumber: tabel <code>indicator_history</code> hasil evaluasi engine.</span>
       </div>
     </div>
 
@@ -771,6 +814,281 @@ async function loadScoreChart() {
 }
 
 // ---------------------------------------------------------------------------
+// Chart 4: sinyal per indikator (19 indikator, enable/disable)
+// ---------------------------------------------------------------------------
+
+let indicatorSpecs = [];              // [{id,name,category,tier,rank}]
+let selectedIndicators = new Set();   // id yang di-enable user
+let indicatorStepDays = 30;
+let indicatorCharts = new Map();      // id -> Chart instance
+let indicatorSeriesCache = new Map(); // id -> series response
+let indicatorFetchToken = 0;
+let indicatorDebounce = null;
+let latestIndicatorStatus = {};       // id -> "Buyzone" | "DeepBottom" | ...
+
+const IND_DEFAULT_SELECTION = ['ma_200w', 'investor_tool_2y', 'ahr999', 'nupl', 'puell_multiple'];
+
+const IND_STATUS_COLOR = {
+  DeepBottom: '#22c55e',
+  Buyzone: '#4ade80',
+  Neutral: '#94a3b8',
+  Overheated: '#fb923c',
+  TopZone: '#ef4444'
+};
+
+const IND_STATUS_LABEL = {
+  DeepBottom: 'Deep Bottom',
+  Buyzone: 'Buy Zone',
+  Neutral: 'Netral',
+  Overheated: 'Overheated',
+  TopZone: 'Top Zone'
+};
+
+async function loadIndicatorSpecs() {
+  const bar = document.getElementById('indicatorToggleBar');
+  try {
+    const data = await fetchJSON(`${API}/api/v1/chart/indicator-specs`);
+    indicatorSpecs = data.indicators || [];
+    if (indicatorSpecs.length === 0) {
+      bar.innerHTML = '<span class="indicator-empty">Registry indikator kosong.</span>';
+      return;
+    }
+    IND_DEFAULT_SELECTION.forEach(id => {
+      if (indicatorSpecs.some(s => s.id === id)) selectedIndicators.add(id);
+    });
+    renderIndicatorToggles();
+  } catch (err) {
+    bar.innerHTML = `<span class="indicator-empty">Gagal memuat daftar indikator: ${err.message}</span>`;
+    console.error('loadIndicatorSpecs gagal:', err);
+  }
+}
+
+function renderIndicatorToggles() {
+  const bar = document.getElementById('indicatorToggleBar');
+  bar.innerHTML = '';
+  indicatorSpecs.forEach(spec => {
+    const label = document.createElement('label');
+    label.className = 'indicator-toggle' + (selectedIndicators.has(spec.id) ? ' on' : '');
+    label.title = `${spec.name} • Tier ${spec.tier} • Rank #${spec.rank}`;
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = spec.id;
+    cb.checked = selectedIndicators.has(spec.id);
+    cb.addEventListener('change', () => toggleIndicator(spec.id, cb.checked));
+
+    const txt = document.createElement('span');
+    txt.textContent = `#${spec.rank} ${spec.id}`;
+
+    label.append(cb, txt);
+    bar.appendChild(label);
+  });
+}
+
+function paintToggleStates() {
+  document.querySelectorAll('#indicatorToggleBar .indicator-toggle').forEach(el => {
+    const cb = el.querySelector('input');
+    if (!cb) return;
+    el.classList.toggle('on', cb.checked);
+  });
+}
+
+function toggleIndicator(id, checked) {
+  if (checked) selectedIndicators.add(id);
+  else selectedIndicators.delete(id);
+  paintToggleStates();
+  scheduleIndicatorCharts();
+}
+
+function setIndicatorPreset(kind, btn) {
+  if (btn) {
+    document.querySelectorAll('#indicatorChartsCard .chart-btn-group:first-child .chart-btn')
+      .forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+
+  if (kind === 'all') {
+    selectedIndicators = new Set(indicatorSpecs.map(s => s.id));
+  } else if (kind === 'none') {
+    selectedIndicators = new Set();
+  } else {
+    const want = kind === 'buy'
+      ? ['DeepBottom', 'Buyzone']
+      : ['Overheated', 'TopZone'];
+    selectedIndicators = new Set(
+      indicatorSpecs.filter(s => want.includes(latestIndicatorStatus[s.id])).map(s => s.id)
+    );
+  }
+
+  renderIndicatorToggles();
+  syncIndicatorCharts();
+}
+
+function setIndicatorStep(days, btn) {
+  indicatorStepDays = days;
+  if (btn) {
+    document.querySelectorAll('#indicatorChartsCard .chart-btn-group:nth-child(2) .chart-btn')
+      .forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+  indicatorSeriesCache.clear();
+  scheduleIndicatorCharts();
+}
+
+function scheduleIndicatorCharts() {
+  if (indicatorDebounce) clearTimeout(indicatorDebounce);
+  indicatorDebounce = setTimeout(() => { indicatorDebounce = null; syncIndicatorCharts(); }, 180);
+}
+
+function indicatorCardEl(id) {
+  return document.getElementById(`indCard_${id}`);
+}
+
+async function syncIndicatorCharts() {
+  if (typeof Chart === 'undefined') return;
+  const grid = document.getElementById('indicatorChartGrid');
+  const note = document.getElementById('indicatorChartNote');
+
+  // Buang card yang tidak lagi dipilih
+  Array.from(grid.children).forEach(el => {
+    const id = el.dataset.indicatorId;
+    if (!id || !selectedIndicators.has(id)) {
+      const inst = indicatorCharts.get(id);
+      if (inst) inst.destroy();
+      indicatorCharts.delete(id);
+      indicatorSeriesCache.delete(id);
+      el.remove();
+    }
+  });
+
+  const ids = indicatorSpecs.map(s => s.id).filter(id => selectedIndicators.has(id));
+  if (ids.length === 0) {
+    note.innerHTML = '<span>Belum ada indikator dipilih. Centang salah satu dari 19 indikator di atas, atau pakai preset <b>Semua</b>.</span>';
+    return;
+  }
+
+  const token = ++indicatorFetchToken;
+  note.innerHTML = `<span>Memuat ${ids.length} deret indikator (step ${indicatorStepDays} hari)…</span>`;
+
+  let data;
+  try {
+    const url = `${API}/api/v1/chart/indicators-history?ids=${encodeURIComponent(ids.join(','))}` +
+                `&step_days=${indicatorStepDays}&limit=200`;
+    data = await fetchJSON(url);
+  } catch (err) {
+    note.innerHTML = `<span class="indicator-status error">Gagal memuat riwayat indikator: ${err.message}</span>`;
+    console.error('syncIndicatorCharts gagal:', err);
+    return;
+  }
+  if (token !== indicatorFetchToken) return;   // respons usang
+
+  const seriesList = data.series || [];
+  seriesList.forEach(s => indicatorSeriesCache.set(s.indicator_id, s));
+
+  seriesList.forEach(s => renderIndicatorCard(s));
+
+  const missing = seriesList.filter(s => !s.has_history).map(s => s.indicator_id);
+  const meta = `step ${data.step_days} hari • engine ${data.engine_version || '—'} • ${seriesList.length} indikator`;
+  const stale = (data.warnings || []).length
+    ? `<span class="indicator-status stale">${(data.warnings || []).join(' ')}</span>`
+    : '';
+  const miss = missing.length
+    ? `<span class="indicator-status error">Belum termaterialisasi: ${missing.join(', ')}</span>`
+    : '';
+  note.innerHTML = `<span>${meta}</span>` + stale + miss;
+}
+
+function renderIndicatorCard(series) {
+  const grid = document.getElementById('indicatorChartGrid');
+  const spec = indicatorSpecs.find(s => s.id === series.indicator_id) || {};
+  const cardKey = series.indicator_id;
+
+  let card = indicatorCardEl(cardKey);
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'indicator-chart-card';
+    card.id = `indCard_${cardKey}`;
+    card.dataset.indicatorId = cardKey;
+    card.innerHTML = `
+      <h4></h4>
+      <div class="chart-wrap"><canvas></canvas></div>
+      <div class="indicator-status"></div>
+      <div class="indicator-status detail"></div>`;
+    grid.appendChild(card);
+  }
+
+  const titleEl = card.querySelector('h4');
+  const statusEl = card.querySelector('.indicator-status');
+  const detailEl = card.querySelector('.indicator-status.detail');
+  const canvas = card.querySelector('canvas');
+
+  const pts = series.points || [];
+  const last = pts.length ? pts[pts.length - 1] : null;
+  const status = last ? last.status : null;
+  const color = IND_STATUS_COLOR[status] || '#60a5fa';
+
+  titleEl.textContent = `#${spec.rank || '—'} ${spec.name || series.name || series.indicator_id}`;
+
+  if (pts.length === 0) {
+    statusEl.textContent = 'Belum ada riwayat tersimpan untuk indikator ini.';
+    statusEl.className = 'indicator-status stale';
+    detailEl.textContent = '';
+    const inst = indicatorCharts.get(cardKey);
+    if (inst) inst.destroy();
+    indicatorCharts.delete(cardKey);
+    return;
+  }
+
+  detailEl.textContent =
+    `${pts[0].date} → ${last.date} • ${pts.length} titik • skor terakhir ${fmtNum(last.score, 1)}` +
+    (last.raw_value !== null && last.raw_value !== undefined ? ` • raw ${fmtNum(last.raw_value, 4)}` : '');
+
+  const inst = indicatorCharts.get(cardKey);
+  if (inst) inst.destroy();
+
+  const opts = chartBaseOptions('Skor 0–100');
+  opts.scales.y.min = 0;
+  opts.scales.y.max = 100;
+  opts.scales.y.ticks.stepSize = 25;
+  opts.animation = { duration: 250 };
+  opts.plugins.tooltip.callbacks = {
+    label: c => {
+      const p = pts[c.dataIndex] || {};
+      const bits = [`Skor ${fmtNum(c.parsed.y, 2)}`];
+      if (p.status) bits.push(IND_STATUS_LABEL[p.status] || p.status);
+      if (p.raw_value !== null && p.raw_value !== undefined) bits.push(`raw ${fmtNum(p.raw_value, 4)}`);
+      if (p.spot_price) bits.push(`spot $${fmtNum(p.spot_price, 0)}`);
+      return bits.join(' • ');
+    }
+  };
+
+  indicatorCharts.set(cardKey, new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: pts.map(p => p.date),
+      datasets: [{
+        label: series.indicator_id,
+        data: pts.map(p => p.score),
+        borderColor: color,
+        backgroundColor: color + '22',
+        borderWidth: 1.9,
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        fill: true,
+        tension: 0.18,
+        spanGaps: true
+      }]
+    },
+    options: opts
+  }));
+
+  statusEl.className = 'indicator-status';
+  statusEl.innerHTML = `<span class="dot" style="background:${color};"></span> ` +
+    `${IND_STATUS_LABEL[status] || status || '—'}` +
+    (last.is_stale ? ' • <b>stale</b>' : '');
+}
+
+// ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
 
@@ -784,6 +1102,11 @@ async function loadAll() {
     ]);
     renderValuation(val);
     renderIndicators(ind);
+    latestIndicatorStatus = {};
+    (ind.indicators || []).forEach(item => {
+      const result = item.latest_result;
+      if (result && result.status) latestIndicatorStatus[item.id] = result.status;
+    });
   } catch (e) {
     errBox.textContent = 'Gagal memuat data valuasi: ' + e.message;
     errBox.classList.remove('hidden');
@@ -793,6 +1116,9 @@ async function loadAll() {
   // Muat daftar metrik on-chain dulu (asinkron), lalu chart.
   await loadOnchainMetrics();
   await Promise.allSettled([loadPriceChart(), loadOnchainChart(), loadScoreChart()]);
+  // Chart 4: registry 19 indikator lalu render chart per indikator terpilih.
+  await loadIndicatorSpecs();
+  await syncIndicatorCharts();
 }
 
 function showDashboard() {

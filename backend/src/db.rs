@@ -9,6 +9,7 @@ use std::time::Duration;
 const SCHEMA_SQL: &str = include_str!("../migrations/0001_initial_schema.sql");
 const SCHEMA_SQL_2: &str = include_str!("../migrations/0002_score_history.sql");
 const SCHEMA_SQL_3: &str = include_str!("../migrations/0003_score_history_step.sql");
+const SCHEMA_SQL_4: &str = include_str!("../migrations/0004_indicator_history.sql");
 
 /// Koneksi SQLite pool dengan WAL mode, busy_timeout >= 30s, FK on.
 pub async fn connect(database_url: &str) -> Result<SqlitePool> {
@@ -51,7 +52,12 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             .await
             .context("apply schema migration 0003")?;
     }
-    set_meta(pool, "schema_version", "0003").await?;
+    // 0004: Materialized history per indicator
+    sqlx::raw_sql(SCHEMA_SQL_4)
+        .execute(pool)
+        .await
+        .context("apply schema migration 0004")?;
+    set_meta(pool, "schema_version", "0004").await?;
     Ok(())
 }
 

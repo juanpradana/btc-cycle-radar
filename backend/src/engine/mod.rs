@@ -152,6 +152,41 @@ pub enum IndicatorId {
     BTC_SPX_RATIO,
 }
 
+impl IndicatorId {
+    /// Id stabil (sama dengan nama serde) — dipakai sebagai kunci di DB & JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IndicatorId::MA_50W => "ma_50w",
+            IndicatorId::MA_30W => "ma_30w",
+            IndicatorId::MA_200W => "ma_200w",
+            IndicatorId::MA_350W => "ma_350w",
+            IndicatorId::MA_CROSS_10W_20W => "ma_cross_10w_20w",
+            IndicatorId::INVESTOR_TOOL_2Y => "investor_tool_2y",
+            IndicatorId::QUANTILE_200W => "quantile_200w",
+            IndicatorId::POWER_LAW => "power_law",
+            IndicatorId::AHR999 => "ahr999",
+            IndicatorId::RAINBOW_CHART => "rainbow_chart",
+            IndicatorId::BITCOIN_CLOCK => "bitcoin_clock",
+            IndicatorId::NUPL => "nupl",
+            IndicatorId::SUPPLY_IN_PROFIT => "supply_in_profit",
+            IndicatorId::LTH_REALIZED_PRICE => "lth_realized_price",
+            IndicatorId::LTH_REALIZED_PL_RATIO => "lth_realized_pl_ratio",
+            IndicatorId::STH_MVRV => "sth_mvrv",
+            IndicatorId::TRUE_MARKET_MEAN_AVIV => "true_market_mean_aviv",
+            IndicatorId::BTC_GOLD_SPD_RATIO => "btc_gold_spd_ratio",
+            IndicatorId::BTC_SPX_RATIO => "btc_spx_ratio",
+        }
+    }
+
+    /// Cari id dari string stabil. `None` bila tidak dikenal.
+    pub fn from_id(raw: &str) -> Option<Self> {
+        INDICATOR_SPECS
+            .iter()
+            .map(|s| s.id)
+            .find(|id| id.as_str() == raw.trim())
+    }
+}
+
 /// Status evaluasi indikator individual.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IndicatorStatus {

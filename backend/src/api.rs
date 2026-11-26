@@ -3,8 +3,8 @@
 //! Prinsip: tidak ada `unwrap()` pada path runtime. Kegagalan DB/network
 //! dikembalikan sebagai respons JSON terstruktur dengan status code yang tepat.
 use crate::chart::{
-    get_onchain_chart, get_price_chart, get_score_history,
-    list_onchain_metrics,
+    get_bulk_indicator_history, get_indicator_history, get_onchain_chart, get_price_chart,
+    get_score_history, list_onchain_metrics, IndicatorHistoryQuery, IndicatorsHistoryQuery,
     OnchainChartQuery, PriceChartQuery, ScoreHistoryQuery,
 };
 use crate::config::AppConfig;
@@ -46,6 +46,22 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(chart_onchain_metrics_handler),
         )
         .route("/api/v1/chart/score-history", get(chart_score_history_handler))
+        .route(
+            "/api/v1/chart/indicator-history",
+            get(chart_indicator_history_handler),
+        )
+        .route(
+            "/api/v1/chart/indicators-history",
+            get(chart_bulk_indicator_history_handler),
+        )
+        .route(
+            "/api/v1/chart/indicator-specs",
+            get(chart_indicator_specs_handler),
+        )
+        .route(
+            "/api/v1/chart/backfill-indicators",
+            post(chart_backfill_indicators_handler),
+        )
         // POST-only: operasi ini memicu I/O jaringan ke sumber eksternal.
         .route("/api/v1/bootstrap", post(trigger_bootstrap))
         .route("/api/v1/update", post(trigger_update))
@@ -370,6 +386,106 @@ async fn chart_score_history_handler(
             Json(json!({
                 "ok": false,
                 "error_code": "chart_score_history_failed",
+                "error": e.to_string(),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn chart_indicator_history_handler(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<IndicatorHistoryQuery>,
+) -> Response {
+    match get_indicator_history(&state.pool, query, state.cfg.min_required_candles).await {
+        Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error_code": "chart_indicator_history_failed",
+                "error": e.to_string(),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn chart_bulk_indicator_history_handler(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<IndicatorsHistoryQuery>,
+) -> Response {
+    match get_bulk_indicator_history(&state.pool, query, state.cfg.min_required_candles).await {
+        Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "ok": false,
+                "error_code": "chart_indicators_history_failed",
+                "error": e.to_string(),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/v1/chart/indicator-specs — daftar 19 indikator lengkap (ID, nama, kategori, tier, rank).
+async fn chart_indicator_specs_handler(
+    State(_state): State<Arc<AppState>>,
+) -> Response {
+    let specs: Vec<_> = crate::engine::INDICATOR_SPECS
+        .iter()
+        .map(|s| {
+            json!({
+                "id": s.id.as_str(),
+                "name": s.name,
+                "category": s.category.as_str(),
+                "tier": format!("{:?}", s.tier),
+                "rank": s.rank,
+            })
+        })
+        .collect();
+
+    (StatusCode::OK, Json(json!({
+        "ok": true,
+        "indicators": specs,
+        "count": specs.len(),
+    }))).into_response()
+}
+
+/// Query parameter untuk POST /api/v1/chart/backfill-indicators
+#[derive(Deserialize, Default)]
+pub struct BackfillIndicatorsQuery {
+    pub step_days: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+/// POST /api/v1/chart/backfill-indicators — materialisasi penuh histori indikator.
+async fn chart_backfill_indicators_handler(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<BackfillIndicatorsQuery>,
+) -> Response {
+    let step_days = query.step_days.unwrap_or(30).clamp(7, 365);
+    let limit = query.limit.unwrap_or(500).clamp(10, 2000);
+
+    match crate::chart::backfill_indicator_history(&state.pool, step_days, limit, state.cfg.min_required_candles).await {
+        Ok((rows_written, unique_ids)) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "step_days": step_days,
+                "limit": limit,
+                "rows_written": rows_written,
+                "indicators_materialized": unique_ids,
+                "engine_version": crate::engine::service::CURRENT_ENGINE_VERSION.to_string(),
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "ok": false,
+                "error_code": "chart_backfill_indicators_failed",
                 "error": e.to_string(),
             })),
         )

@@ -10,6 +10,7 @@ use chrono::{Datelike, Duration, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
+use crate::engine::{IndicatorResult, IndicatorStatus};
 
 /// Satu titik chart harga (close + MA weekly).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +91,275 @@ pub struct ScoreHistoryQuery {
     /// "auto" (default) = pakai snapshot DB bila cukup, selain itu replay.
     /// "replay" = paksa hitung ulang, "snapshots" = hanya baca DB.
     pub method: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Historis per indikator (19 indikator bisa di-enable/disable di UI)
+// ---------------------------------------------------------------------------
+
+/// Satu titik deret waktu satu indikator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndicatorHistoryPoint {
+    pub date: String,
+    /// Nilai mentah indikator (mis. AHR999, rasio NUPL, persentil). Null bila
+    /// modul matematika tidak menghasilkan nilai mentah.
+    pub raw_value: Option<f64>,
+    /// Skor ternormalisasi 0–100 untuk titik ini.
+    pub score: f64,
+    /// Status sinyal: DeepBottom | Buyzone | Neutral | Overheated | TopZone.
+    pub status: String,
+    /// Status string asli dari modul matematika (mis. "DEEP_BOTTOM", "RISK_OFF").
+    pub status_str: Option<String>,
+    pub is_stale: bool,
+    pub spot_price: Option<f64>,
+}
+
+/// Deret waktu satu indikator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndicatorSeries {
+    pub indicator_id: String,
+    pub name: String,
+    pub rank: u8,
+    pub tier: String,
+    pub category: String,
+    pub step_days: i64,
+    pub points: Vec<IndicatorHistoryPoint>,
+    pub first_date: Option<String>,
+    pub last_date: Option<String>,
+    /// true bila tabel `indicator_history` sudah punya titik untuk indikator ini.
+    pub has_history: bool,
+    pub engine_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndicatorHistoryResponse {
+    pub ok: bool,
+    pub indicator_id: String,
+    pub step_days: i64,
+    pub points: Vec<IndicatorHistoryPoint>,
+    pub has_history: bool,
+    pub engine_version: String,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndicatorsHistoryResponse {
+    pub ok: bool,
+    pub step_days: i64,
+    pub engine_version: String,
+    pub series: Vec<IndicatorSeries>,
+    pub unavailable: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct IndicatorHistoryQuery {
+    /// Id indikator (wajib), mis. `nupl`, `ma_50w`, `ahr999`.
+    pub id: Option<String>,
+    pub step_days: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct IndicatorsHistoryQuery {
+    /// Daftar id dipisah koma. Kosong = semua 19 indikator.
+    pub ids: Option<String>,
+    pub step_days: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+// ---------------------------------------------------------------------------
+// Helper internal
+// ---------------------------------------------------------------------------
+
+/// Serialisasi `IndicatorStatus` ke label baku (sama dengan Serialize derive).
+fn status_label(s: IndicatorStatus) -> &'static str {
+    match s {
+        IndicatorStatus::DeepBottom => "DeepBottom",
+        IndicatorStatus::Buyzone => "Buyzone",
+        IndicatorStatus::Neutral => "Neutral",
+        IndicatorStatus::Overheated => "Overheated",
+        IndicatorStatus::TopZone => "TopZone",
+    }
+}
+
+/// Bangun daftar tanggal sampling mundur dari candle terakhir (sama seperti replay skor).
+/// Mengembalikan (tanggal_valid_ascending, warnings).
+pub async fn sample_dates(
+    pool: &SqlitePool,
+    step_days: i64,
+    limit: i64,
+    min_required_candles: i64,
+) -> Result<(Vec<NaiveDate>, Vec<String>)> {
+    let bounds = sqlx::query(
+        "SELECT MIN(date) AS f, MAX(date) AS l, COUNT(*) AS c FROM btc_daily_ohlcv",
+    )
+    .fetch_one(pool)
+    .await?;
+    let first_str: Option<String> = bounds.try_get("f")?;
+    let last_str: Option<String> = bounds.try_get("l")?;
+    let candle_count: i64 = bounds.try_get("c")?;
+    let (Some(first_str), Some(last_str)) = (first_str, last_str) else {
+        anyhow::bail!("tidak ada candle untuk replay indikator");
+    };
+    let first_date = parse_date(&first_str).context("parse tanggal awal")?;
+    let last_date = parse_date(&last_str).context("parse tanggal akhir")?;
+
+    let skip = (min_required_candles - 1).max(0);
+    let coverage_start = if candle_count > skip {
+        let row = sqlx::query("SELECT date FROM btc_daily_ohlcv ORDER BY date ASC LIMIT 1 OFFSET ?")
+            .bind(skip)
+            .fetch_optional(pool)
+            .await?;
+        match row {
+            Some(r) => {
+                let s: String = r.get("date");
+                parse_date(&s).unwrap_or(first_date)
+            }
+            None => last_date,
+        }
+    } else {
+        last_date
+    };
+
+    let mut warnings = Vec::new();
+    if coverage_start > first_date {
+        warnings.push(format!(
+            "replay dibatasi mulai {coverage_start} (butuh minimal {min_required_candles} candle; DB punya {candle_count})"
+        ));
+    }
+
+    let mut sample: Vec<NaiveDate> = Vec::new();
+    let mut cursor = last_date;
+    while cursor >= coverage_start && sample.len() < limit as usize {
+        sample.push(cursor);
+        cursor = cursor - Duration::days(step_days);
+    }
+    sample.reverse();
+    Ok((sample, warnings))
+}
+
+/// Baca history satu indikator dari tabel materialized `indicator_history`.
+/// Jika tabel/baris belum ada → kembalikan array kosong (tidak error).
+pub async fn read_indicator_history(
+    pool: &SqlitePool,
+    indicator_id: &str,
+    step_days: i64,
+    limit: i64,
+) -> Result<Vec<IndicatorHistoryPoint>> {
+    let rows = match sqlx::query(
+        "SELECT date, raw_value, score, status, status_str, is_stale, spot_price
+         FROM indicator_history
+         WHERE indicator_id = ? AND step_days = ?
+         ORDER BY date DESC LIMIT ?",
+    )
+    .bind(indicator_id)
+    .bind(step_days)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let d: String = r.get("date");
+        out.push(IndicatorHistoryPoint {
+            date: d,
+            raw_value: r.try_get("raw_value").ok().flatten(),
+            score: r.get("score"),
+            status: r.get("status"),
+            status_str: r.try_get("status_str").ok().flatten(),
+            is_stale: r.get::<i64, _>("is_stale") != 0,
+            spot_price: r.try_get("spot_price").ok().flatten(),
+        });
+    }
+    out.reverse();
+    Ok(out)
+}
+
+/// Tulis satu baris `indicator_history` (idempotent via PK).
+pub async fn write_indicator_history(
+    pool: &SqlitePool,
+    indicator_id: &str,
+    date: &NaiveDate,
+    step_days: i64,
+    engine_version: &str,
+    spot_price: f64,
+    result: &IndicatorResult,
+) -> Result<()> {
+    let date_str = date.format("%Y-%m-%d").to_string();
+    sqlx::query(
+        "INSERT OR REPLACE INTO indicator_history
+         (indicator_id, date, step_days, score, status, raw_value, status_str, is_stale, spot_price, engine_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(indicator_id)
+    .bind(&date_str)
+    .bind(step_days)
+    .bind(result.score)
+    .bind(status_label(result.status))
+    .bind(result.raw_value)
+    .bind(&result.status_str)
+    .bind(if result.is_stale { 1 } else { 0 })
+    .bind(spot_price)
+    .bind(engine_version)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Replay semua indikator pada tanggal sampling & materialkan ke `indicator_history`.
+/// Jika `only` diisi, hanya materialkan subset id tersebut (optimasi).
+pub async fn replay_indicator_history(
+    pool: &SqlitePool,
+    step_days: i64,
+    limit: i64,
+    min_required_candles: i64,
+    only: Option<&std::collections::BTreeSet<String>>,
+) -> Result<Vec<String>> {
+    let engine_version = crate::engine::service::CURRENT_ENGINE_VERSION.to_string();
+    let (sample, mut warnings) = sample_dates(pool, step_days, limit, min_required_candles).await?;
+
+    for as_of in sample {
+        match crate::engine::loader::load_market_input(pool, Some(as_of), min_required_candles).await {
+            Ok(loaded) => {
+                let summary = crate::engine::evaluate_all_indicators(&loaded.input);
+                let date_str = as_of.format("%Y-%m-%d").to_string();
+
+                // Tulis score_history (sudah ada logika, tapi pastikan step_days konsisten).
+                let _ = sqlx::query(
+                    "INSERT OR REPLACE INTO score_history (date, valuation_score, current_zone, spot_price, engine_version, step_days)
+                     VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&date_str)
+                .bind(summary.valuation_score)
+                .bind(format!("{:?}", summary.current_zone))
+                .bind(summary.spot_price)
+                .bind(&engine_version)
+                .bind(step_days)
+                .execute(pool)
+                .await;
+
+                // Tulis indicator_history untuk setiap indikator (atau subset).
+                for res in &summary.indicator_results {
+                    let id_str = res.id.as_str();
+                    if let Some(set) = only {
+                        if !set.contains(id_str) {
+                            continue;
+                        }
+                    }
+                    let _ = write_indicator_history(pool, id_str, &as_of, step_days, &engine_version, summary.spot_price, res).await;
+                }
+            }
+            Err(e) => {
+                warnings.push(format!("{as_of}: {e}"));
+            }
+        }
+    }
+    Ok(warnings)
 }
 
 // ---------------------------------------------------------------------------
@@ -478,7 +748,151 @@ async fn read_score_snapshots(
     Ok(out)
 }
 
-/// GET /api/v1/chart/score-history
+/// GET /api/v1/chart/indicator-history
+pub async fn get_indicator_history(
+    pool: &SqlitePool,
+    query: IndicatorHistoryQuery,
+    _min_required_candles: i64,
+) -> Result<IndicatorHistoryResponse> {
+    let id_str = match query.id {
+        Some(s) if !s.trim().is_empty() => s.trim().to_string(),
+        _ => anyhow::bail!("parameter `id` (indicator id) wajib diisi"),
+    };
+
+    let spec = crate::engine::INDICATOR_SPECS
+        .iter()
+        .find(|s| s.id.as_str() == id_str)
+        .ok_or_else(|| anyhow::anyhow!("indikator `{id_str}` tidak dikenal"))?;
+
+    let step_days = query.step_days.unwrap_or(30).clamp(7, 365);
+    let limit = query.limit.unwrap_or(90).clamp(5, 400);
+
+    let points = read_indicator_history(pool, spec.id.as_str(), step_days, limit).await?;
+    let has_history = !points.is_empty();
+
+    Ok(IndicatorHistoryResponse {
+        ok: true,
+        indicator_id: spec.id.as_str().to_string(),
+        step_days,
+        has_history,
+        points,
+        engine_version: crate::engine::service::CURRENT_ENGINE_VERSION.to_string(),
+        warnings: Vec::new(),
+    })
+}
+
+/// GET /api/v1/chart/indicators-history (bulk)
+pub async fn get_bulk_indicator_history(
+    pool: &SqlitePool,
+    query: IndicatorsHistoryQuery,
+    _min_required_candles: i64,
+) -> Result<IndicatorsHistoryResponse> {
+    let step_days = query.step_days.unwrap_or(30).clamp(7, 365);
+    let limit = query.limit.unwrap_or(90).clamp(5, 400);
+
+    let target_ids: Vec<&str> = match &query.ids {
+        Some(ids_str) if !ids_str.trim().is_empty() => {
+            ids_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect()
+        }
+        _ => crate::engine::INDICATOR_SPECS
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect(),
+    };
+
+    let mut series = Vec::new();
+    let mut unavailable = Vec::new();
+    let mut needs_materialize = Vec::new();
+
+    // Baca yang sudah ada, catat yang kosong
+    for id_str in &target_ids {
+        if let Some(spec) = crate::engine::INDICATOR_SPECS
+            .iter()
+            .find(|s| s.id.as_str() == *id_str)
+        {
+            let points = read_indicator_history(pool, spec.id.as_str(), step_days, limit).await?;
+            let has_history = !points.is_empty();
+            let first_date = points.first().map(|p| p.date.clone());
+            let last_date = points.last().map(|p| p.date.clone());
+
+            if !has_history {
+                needs_materialize.push(spec.id.as_str());
+            }
+
+            series.push(IndicatorSeries {
+                indicator_id: spec.id.as_str().to_string(),
+                name: spec.name.to_string(),
+                rank: spec.rank,
+                tier: format!("{:?}", spec.tier),
+                category: spec.category.as_str().to_string(),
+                step_days,
+                first_date,
+                last_date,
+                has_history,
+                points,
+                engine_version: crate::engine::service::CURRENT_ENGINE_VERSION.to_string(),
+            });
+        } else {
+            unavailable.push((*id_str).to_string());
+        }
+    }
+
+    // Auto-materialize: jika ada indikator kosong, replay terbatas untuk subset itu.
+    // Dibatasi ke 160 titik (≈13 tahun @ step=30) agar responsif di < 20 detik.
+    let mut warnings = Vec::new();
+    if !needs_materialize.is_empty() {
+        let mat_limit = limit.min(160);
+        let only_set: std::collections::BTreeSet<String> =
+            needs_materialize.iter().map(|s| s.to_string()).collect();
+        let mat_warnings = replay_indicator_history(pool, step_days, mat_limit, 0, Some(&only_set)).await?;
+        warnings.push(format!(
+            "Auto-materialisasi {} indikator x {} titik. Warnings: {}",
+            needs_materialize.len(), mat_limit, mat_warnings.len()
+        ));
+        // Re-read untuk mengisi points
+        for s in &mut series {
+            if only_set.contains(&s.indicator_id) {
+                s.points = read_indicator_history(pool, &s.indicator_id, step_days, limit).await?;
+                s.has_history = !s.points.is_empty();
+                s.first_date = s.points.first().map(|p| p.date.clone());
+                s.last_date = s.points.last().map(|p| p.date.clone());
+            }
+        }
+    }
+
+    Ok(IndicatorsHistoryResponse {
+        ok: true,
+        step_days,
+        engine_version: crate::engine::service::CURRENT_ENGINE_VERSION.to_string(),
+        series,
+        unavailable,
+        warnings,
+    })
+}
+
+/// Backfill penuh untuk semua 19 indikator ke tabel `indicator_history`.
+/// Mengembalikan (total_rows_step, distinct_indicators).
+pub async fn backfill_indicator_history(
+    pool: &SqlitePool,
+    step_days: i64,
+    limit: i64,
+    min_required_candles: i64,
+) -> Result<(usize, usize)> {
+    let _ = replay_indicator_history(pool, step_days, limit, min_required_candles, None).await?;
+    let (cnt,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM indicator_history WHERE step_days = ?",
+    )
+    .bind(step_days)
+    .fetch_one(pool)
+    .await?;
+    let (dist,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT indicator_id) FROM indicator_history WHERE step_days = ?",
+    )
+    .bind(step_days)
+    .fetch_one(pool)
+    .await?;
+    Ok((cnt as usize, dist as usize))
+}
 ///
 /// Read-only. Mode `auto`: pakai snapshot DB (hasil evaluasi asli engine) bila
 /// jumlahnya mencukupi; selain itu replay evaluasi per sampel `step_days`.
@@ -600,6 +1014,21 @@ pub async fn get_score_history(
                 .bind(step_days)
                 .execute(pool)
                 .await;
+
+                // Materialkan juga history 19 indikator pada tanggal sampel ini
+                // (gratis: evaluasi sudah dihitung di atas).
+                for res in &summary.indicator_results {
+                    let _ = write_indicator_history(
+                        pool,
+                        res.id.as_str(),
+                        &as_of,
+                        step_days,
+                        &engine_version,
+                        summary.spot_price,
+                        res,
+                    )
+                    .await;
+                }
 
                 points.push(ScoreHistoryPoint {
                     date: date_str,

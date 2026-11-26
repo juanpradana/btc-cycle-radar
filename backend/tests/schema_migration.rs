@@ -32,6 +32,7 @@ async fn migrations_run_and_tables_exist() {
         "fetch_logs",
         "app_meta",
         "score_history",
+        "indicator_history",
     ] {
         assert!(names.contains(&expected.to_string()), "missing table {expected}; got {names:?}");
     }
@@ -46,7 +47,7 @@ async fn migrations_run_and_tables_exist() {
 
     // schema_version tercatat setelah migrasi
     let ver = db::get_meta(&pool, "schema_version").await.expect("get_meta");
-    assert_eq!(ver.as_deref(), Some("0003"));
+    assert_eq!(ver.as_deref(), Some("0004"));
 }
 
 #[tokio::test]
@@ -55,7 +56,7 @@ async fn migration_is_idempotent() {
     // jalankan ulang migrasi -> tidak boleh error (semua IF NOT EXISTS)
     db::run_migrations(&pool).await.expect("second migration run");
     let ver = db::get_meta(&pool, "schema_version").await.expect("get_meta");
-    assert_eq!(ver.as_deref(), Some("0003"));
+    assert_eq!(ver.as_deref(), Some("0004"));
 }
 
 #[tokio::test]

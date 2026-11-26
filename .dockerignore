@@ -39,4 +39,3 @@ docker-compose*.yml
 README.md
 docs
 node_modules
-frontend

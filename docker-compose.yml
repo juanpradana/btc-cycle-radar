@@ -44,7 +44,7 @@ services:
     restart: unless-stopped
     environment: *app-environment
     ports:
-      - "${HOST_PORT:-8099}:8099"
+      - "${BIND_HOST:-127.0.0.1}:${HOST_PORT:-8099}:8099"
     volumes: *app-volumes
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8099/healthz"]

@@ -1,0 +1,103 @@
+# ---------------------------------------------------------------------------
+# BTC Cycle Radar — varian IMAGE (tanpa build di server).
+#
+# Dipakai untuk VPS kecil: image sudah dibangun CI di GitHub Actions dan
+# dipublikasikan ke GHCR, jadi host hanya perlu `docker pull`.
+#
+#   cp .env.docker.example .env      # atur BIND_HOST & HOST_PORT
+#   docker compose -f docker-compose.ghcr.yml up -d
+#
+# BIND_HOST:
+#   127.0.0.1   -> nginx di host (default, paling aman)
+#   172.17.0.1  -> nginx berjalan sebagai container (docker0 gateway)
+#   0.0.0.0     -> terbuka langsung ke publik (tidak disarankan)
+# ---------------------------------------------------------------------------
+name: btc-cycle-radar
+
+x-app-environment: &app-environment
+  BIND_ADDR: 0.0.0.0:8099
+  DATABASE_URL: sqlite://data/btc_cycle_radar.db
+  BOOTSTRAP_START: ${BOOTSTRAP_START:-2010-07-01}
+  MIN_REQUIRED_CANDLES: ${MIN_REQUIRED_CANDLES:-4500}
+  AUTO_BOOTSTRAP: ${AUTO_BOOTSTRAP:-true}
+  BGEOMETRICS_API_KEY: ${BGEOMETRICS_API_KEY:-}
+  BGEOMETRICS_MAX_ENDPOINTS_PER_DAY: ${BGEOMETRICS_MAX_ENDPOINTS_PER_DAY:-8}
+  FRED_API_KEY: ${FRED_API_KEY:-}
+  RUST_LOG: ${RUST_LOG:-btc_cycle_radar=info,sqlx=warn,axum=info,tower_http=info}
+  TZ: ${TZ:-UTC}
+
+x-app-volumes: &app-volumes
+  - btc-data:/app/data
+
+services:
+  app:
+    image: ${IMAGE:-ghcr.io/juanpradana/btc-cycle-radar:latest}
+    pull_policy: always
+    container_name: btc-cycle-radar
+    init: true
+    restart: unless-stopped
+    environment: *app-environment
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${HOST_PORT:-8099}:8099"
+    volumes: *app-volumes
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8099/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 600s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768m
+
+  sync:
+    profiles: ["cron"]
+    image: ${IMAGE:-ghcr.io/juanpradana/btc-cycle-radar:latest}
+    pull_policy: always
+    container_name: btc-cycle-radar-sync
+    init: true
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment: *app-environment
+    volumes: *app-volumes
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -u
+        interval="${SYNC_INTERVAL_SECONDS:-86400}"
+        while true; do
+          echo "[sync] $(date -u +%Y-%m-%dT%H:%M:%SZ) mulai sinkronisasi inkremental"
+          /usr/local/bin/btc-cycle-radar sync --incremental \
+            || echo "[sync] gagal — API tetap menyajikan data tersimpan dengan is_stale=true"
+          sleep "$interval"
+        done
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 512m
+
+volumes:
+  btc-data:
+    driver: local

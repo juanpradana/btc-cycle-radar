@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0b1020">
 <title>BTC Cycle Radar — Dashboard Valuasi Siklus Panjang Bitcoin</title>
+<!-- Chart.js self-hosted: tidak bergantung CDN/CSP eksternal -->
+<script src="/vendor/chart.umd.min.js"></script>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -98,6 +100,47 @@
     font-size: 0.7rem;
   }
   .cat-weight-color { width: 0.6rem; height: 0.6rem; border-radius: 0.15rem; }
+
+  /* ===== Charts ===== */
+  .chart-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 1rem;
+    padding: 1.1rem 1.25rem;
+    backdrop-filter: blur(8px);
+    margin-bottom: 1.25rem;
+  }
+  .chart-header {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.85rem;
+  }
+  .chart-title-wrap h3 { font-size: 0.95rem; font-weight: 700; color: #e7ecff; }
+  .chart-title-wrap p { font-size: 0.72rem; color: #8ab4ff; margin-top: 0.15rem; }
+  .chart-controls { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .chart-btn-group {
+    display: inline-flex; background: rgba(0,0,0,0.25);
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 0.45rem; padding: 0.15rem;
+  }
+  .chart-btn {
+    background: transparent; border: none; color: #a8b3d4;
+    padding: 0.25rem 0.55rem; font-size: 0.68rem; font-weight: 600;
+    border-radius: 0.35rem; cursor: pointer; transition: all 0.15s ease;
+  }
+  .chart-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
+  .chart-btn.active { background: rgba(59,130,246,0.35); color: #93c5fd; font-weight: 700; }
+  .chart-select {
+    background: #0d152c; border: 1px solid rgba(59,130,246,0.3);
+    color: #e7ecff; padding: 0.28rem 0.6rem; border-radius: 0.45rem;
+    font-size: 0.72rem; cursor: pointer; outline: none;
+  }
+  .chart-wrap { position: relative; width: 100%; height: 340px; margin-top: 0.5rem; }
+  .chart-legend-notes {
+    display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.75rem;
+    font-size: 0.7rem; color: #94a3b8; padding-top: 0.5rem;
+    border-top: 1px solid rgba(255,255,255,0.04);
+  }
+  .chart-legend-notes span { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; display: inline-block; }
 </style>
 </head>
 <body>
@@ -160,6 +203,85 @@
       <div id="guideBox" class="guide">—</div>
     </div>
 
+    <!-- ================= CHARTS SECTION ================= -->
+
+    <!-- Chart 1: Harga BTC & Moving Average Jangka Panjang -->
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title-wrap">
+          <h3>Siklus Harga BTC & Moving Average Jangka Panjang</h3>
+          <p>Memantau batas siklus historis (200W SMA), regim tren (50W MA), dan momentum (30W MA)</p>
+        </div>
+        <div class="chart-controls">
+          <div class="chart-btn-group">
+            <button class="chart-btn" onclick="setPriceRange(365, this)">1Y</button>
+            <button class="chart-btn" onclick="setPriceRange(730, this)">2Y</button>
+            <button class="chart-btn" onclick="setPriceRange(1460, this)">4Y</button>
+            <button class="chart-btn active" onclick="setPriceRange(null, this)">Semua</button>
+          </div>
+          <div class="chart-btn-group">
+            <button class="chart-btn active" id="btnScaleLog" onclick="setPriceScale('logarithmic')">Log</button>
+            <button class="chart-btn" id="btnScaleLin" onclick="setPriceScale('linear')">Lin</button>
+          </div>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="priceChartCanvas"></canvas>
+      </div>
+      <div class="chart-legend-notes">
+        <span><span class="dot" style="background:#38bdf8;"></span> Spot Close</span>
+        <span><span class="dot" style="background:#facc15;"></span> 200W SMA (Bawah Siklus Historis)</span>
+        <span><span class="dot" style="background:#4ade80;"></span> 50W MA (Gerbang Bull/Bear)</span>
+        <span><span class="dot" style="background:#c084fc;"></span> 30W MA (Mid Trend)</span>
+      </div>
+    </div>
+
+    <!-- Chart 2: Metrik On-Chain Historis -->
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title-wrap">
+          <h3>Metrik On-Chain Historis</h3>
+          <p>Data fundamental on-chain riil: psikologi pemegang koin dan transfer modal</p>
+        </div>
+        <div class="chart-controls">
+          <select id="onchainMetricSelect" class="chart-select" onchange="changeOnchainMetric(this.value)">
+            <option value="">Memuat metrik…</option>
+          </select>
+          <div class="chart-btn-group">
+            <button class="chart-btn" onclick="setOnchainRange(365, this)">1Y</button>
+            <button class="chart-btn" onclick="setOnchainRange(730, this)">2Y</button>
+            <button class="chart-btn" onclick="setOnchainRange(1460, this)">4Y</button>
+            <button class="chart-btn active" onclick="setOnchainRange(null, this)">Semua</button>
+          </div>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="onchainChartCanvas"></canvas>
+      </div>
+      <div id="onchainInfoNote" class="chart-legend-notes">
+        <span id="onchainMetaNote">Sumber: Real SQLite Database</span>
+      </div>
+    </div>
+
+    <!-- Chart 3: Histori Skor Valuasi Siklus -->
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title-wrap">
+          <h3>Histori Skor Valuasi Siklus (Cycle Radar Score)</h3>
+          <p>Composite valuation index (0 = Terlampau Murah / Capitulation, 100 = Puncak Siklus Ekstrem)</p>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="scoreChartCanvas"></canvas>
+      </div>
+      <div class="chart-legend-notes">
+        <span><span class="dot" style="background:rgba(34,197,94,0.4);"></span> 0–20 Deep Capitulation</span>
+        <span><span class="dot" style="background:rgba(74,222,128,0.4);"></span> 20–35 Buy Zone</span>
+        <span><span class="dot" style="background:rgba(148,163,184,0.3);"></span> 35–75 Netral / Transisi</span>
+        <span><span class="dot" style="background:rgba(239,68,68,0.4);"></span> 75–100 Euphoria</span>
+      </div>
+    </div>
+
     <div class="card">
       <h2>Bobot Kategori</h2>
       <div id="catWeights" class="cat-weights"></div>
@@ -195,9 +317,22 @@
 <script>
 const API = window.location.origin;
 
+let priceChartInstance = null;
+let onchainChartInstance = null;
+let scoreChartInstance = null;
+
+let currentPriceDays = null;
+let currentPriceScale = 'logarithmic';
+let currentOnchainDays = null;
+let currentOnchainMetric = 'nupl';
+
 async function fetchJSON(path) {
   const res = await fetch(path, { headers: { 'Accept': 'application/json' } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    let errBody = '';
+    try { errBody = await res.text(); } catch(_) {}
+    throw new Error(`HTTP ${res.status}: ${errBody}`);
+  }
   return res.json();
 }
 
@@ -284,7 +419,364 @@ function renderIndicators(data) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Chart helpers
+// ---------------------------------------------------------------------------
+
+function chartBaseOptions(yTitle) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 350 },
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: {
+        display: false
+      },
+      tooltip: {
+        backgroundColor: 'rgba(11,16,32,0.95)',
+        borderColor: 'rgba(138,180,255,0.25)',
+        borderWidth: 1,
+        titleColor: '#e7ecff',
+        bodyColor: '#c7d2fe',
+        padding: 10,
+        displayColors: true
+      }
+    },
+    scales: {
+      x: {
+        grid: { color: 'rgba(255,255,255,0.08)' },
+        ticks: {
+          color: '#8ab4ff',
+          maxTicksLimit: 12,
+          autoSkip: true,
+          maxRotation: 0,
+          minRotation: 0,
+          callback: function (value, index) {
+            const raw = this.getLabelForValue(value);
+            if (typeof raw === 'string' && raw.length >= 7) {
+              const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+              const y = raw.slice(0, 4);
+              const m = parseInt(raw.slice(5, 7), 10);
+              if (m >= 1 && m <= 12) return `${months[m - 1]} ${y}`;
+            }
+            return raw;
+          }
+        }
+      },
+      y: {
+        grid: { color: 'rgba(255,255,255,0.08)' },
+        ticks: { color: '#8ab4ff' },
+        title: yTitle ? { display: true, text: yTitle, color: '#8ab4ff', font: { size: 10 } } : undefined
+      }
+    }
+  };
+}
+
+function destroyChart(inst) {
+  if (inst) { inst.destroy(); }
+  return null;
+}
+
+function setActiveBtn(groupIdx, btn) {
+  const groups = document.querySelectorAll('.chart-card .chart-btn-group');
+  const g = groups[groupIdx];
+  if (!g) return;
+  g.querySelectorAll('.chart-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
+
+// ---------------------------------------------------------------------------
+// Chart 1: price + long-term MAs
+// ---------------------------------------------------------------------------
+
+async function loadPriceChart() {
+  if (typeof Chart === 'undefined') return;
+  try {
+    let url = `${API}/api/v1/chart/price?cadence=weekly`;
+    if (currentPriceDays) url += `&days=${currentPriceDays}`;
+    const data = await fetchJSON(url);
+    if (!data.ok || !data.points || data.points.length === 0) return;
+
+    const labels = data.points.map(p => p.date);
+    const ds = (label, key, color, width, dash) => ({
+      label,
+      data: data.points.map(p => p[key] === null ? null : p[key]),
+      borderColor: color,
+      backgroundColor: color,
+      borderWidth: width,
+      borderDash: dash || [],
+      pointRadius: 0,
+      pointHoverRadius: 3,
+      fill: false,
+      tension: 0.15,
+      spanGaps: true
+    });
+
+    const ctx = document.getElementById('priceChartCanvas').getContext('2d');
+    priceChartInstance = destroyChart(priceChartInstance);
+
+    const opts = chartBaseOptions('Harga (USD)');
+    opts.scales.y.type = currentPriceScale;
+    opts.scales.y.ticks.callback = v => '$' + Number(v).toLocaleString('en-US');
+    opts.plugins.legend = {
+      display: true,
+      position: 'top',
+      align: 'start',
+      labels: {
+        color: '#c7d2fe',
+        font: { size: 11 },
+        usePointStyle: true,
+        padding: 16
+      }
+    };
+    opts.plugins.tooltip.callbacks = {
+      label: c => `${c.dataset.label}: $${fmtNum(c.parsed.y, 2)}`
+    };
+
+    priceChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          ds('BTC/USD', 'close', '#38bdf8', 2.0),
+          ds('200W SMA', 'ma_200w', '#facc15', 1.8),
+          ds('50W MA', 'ma_50w', '#4ade80', 1.6),
+          ds('30W MA', 'ma_30w', '#c084fc', 1.6, [6, 4])
+        ]
+      },
+      options: opts
+    });
+  } catch (err) {
+    console.error('loadPriceChart gagal:', err);
+  }
+}
+
+function setPriceRange(days, btn) {
+  currentPriceDays = days;
+  setActiveBtn(0, btn);
+  loadPriceChart();
+}
+
+function setPriceScale(scale) {
+  currentPriceScale = scale;
+  document.getElementById('btnScaleLog').classList.toggle('active', scale === 'logarithmic');
+  document.getElementById('btnScaleLin').classList.toggle('active', scale === 'linear');
+  if (priceChartInstance) {
+    priceChartInstance.options.scales.y.type = scale;
+    priceChartInstance.update('none');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Chart 2: on-chain metric
+// ---------------------------------------------------------------------------
+
+// Label manusiawi untuk metrik on-chain yang dikenal. Metrik yang tidak ada di
+// daftar ini tetap ditampilkan memakai nama teknisnya (tidak dikarang).
+const ONCHAIN_LABELS = {
+  nupl: 'NUPL (Net Unrealized Profit/Loss)',
+  sth_nupl: 'STH-NUPL (Short-Term Holder NUPL)',
+  mvrv: 'MVRV Ratio',
+  mvrv_cm: 'MVRV (CoinMetrics)',
+  sth_mvrv: 'STH-MVRV (Short-Term Holder)',
+  lth_mvrv: 'LTH-MVRV (Long-Term Holder)',
+  realized_price: 'Realized Price ($)',
+  realized_price_cm: 'Realized Price CoinMetrics ($)',
+  true_market_mean: 'True Market Mean ($)',
+  lth_realized_price: 'LTH Realized Price ($)',
+  sth_realized_price: 'STH Realized Price ($)',
+  aviv: 'AVIV Ratio',
+  rhodl: 'RHODL Ratio',
+  puell_multiple: 'Puell Multiple',
+  reserve_risk: 'Reserve Risk',
+  thermo_cap: 'Thermo-Cap ($)',
+  cvdd: 'CVDD ($)',
+  market_cap: 'Market Cap ($)',
+  supply: 'Supply (BTC)',
+  supply_in_profit_pct: 'Supply in Profit (%)',
+  realized_profit_lth: 'LTH Realized Profit ($)',
+  realized_loss_lth: 'LTH Realized Loss ($)'
+};
+
+function onchainLabel(metric) {
+  return ONCHAIN_LABELS[metric] || metric;
+}
+
+async function loadOnchainMetrics() {
+  const sel = document.getElementById('onchainMetricSelect');
+  try {
+    const data = await fetchJSON(`${API}/api/v1/chart/onchain-metrics`);
+    const metrics = (data && data.metrics) || [];
+    if (metrics.length === 0) {
+      sel.innerHTML = '<option value="">Tidak ada metrik tersimpan</option>';
+      currentOnchainMetric = '';
+      return;
+    }
+    sel.innerHTML = metrics.map(m =>
+      `<option value="${m.metric}">${onchainLabel(m.metric)} — ${m.points} titik</option>`
+    ).join('');
+    const preferred = metrics.find(m => m.metric === 'nupl') || metrics[0];
+    currentOnchainMetric = preferred.metric;
+    sel.value = currentOnchainMetric;
+  } catch (err) {
+    sel.innerHTML = '<option value="nupl">NUPL (Net Unrealized Profit/Loss)</option>';
+    currentOnchainMetric = 'nupl';
+    console.error('loadOnchainMetrics gagal:', err);
+  }
+}
+
+async function loadOnchainChart() {
+  if (typeof Chart === 'undefined') return;
+  const note = document.getElementById('onchainMetaNote');
+  if (!currentOnchainMetric) {
+    note.textContent = 'Belum ada metrik on-chain tersimpan di database.';
+    return;
+  }
+  try {
+    let url = `${API}/api/v1/chart/onchain?metric=${encodeURIComponent(currentOnchainMetric)}`;
+    if (currentOnchainDays) url += `&days=${currentOnchainDays}`;
+    const data = await fetchJSON(url);
+    if (!data.ok || !data.points || data.points.length === 0) {
+      note.textContent = `Metrik "${currentOnchainMetric}" tidak memiliki data tersimpan`;
+      onchainChartInstance = destroyChart(onchainChartInstance);
+      return;
+    }
+
+    note.textContent = `Sumber: ${data.source || 'onchain_daily'} • ${data.first_date || '—'} → ${data.last_date || '—'} • ${data.points.length} titik observasi`;
+
+    const labels = data.points.map(p => p.date);
+    const values = data.points.map(p => p.value);
+
+    const ctx = document.getElementById('onchainChartCanvas').getContext('2d');
+    onchainChartInstance = destroyChart(onchainChartInstance);
+
+    const opts = chartBaseOptions(currentOnchainMetric.toUpperCase());
+    opts.plugins.tooltip.callbacks = {
+      label: c => `${c.dataset.label}: ${fmtNum(c.parsed.y, 4)}`
+    };
+
+    onchainChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: currentOnchainMetric.toUpperCase(),
+          data: values,
+          borderColor: '#4ade80',
+          backgroundColor: 'rgba(74,222,128,0.10)',
+          borderWidth: 1.8,
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          fill: true,
+          tension: 0.15
+        }]
+      },
+      options: opts
+    });
+  } catch (err) {
+    note.textContent = `Gagal memuat metrik "${currentOnchainMetric}": ${err.message}`;
+    console.error('loadOnchainChart gagal:', err);
+  }
+}
+
+function changeOnchainMetric(metric) {
+  currentOnchainMetric = metric;
+  loadOnchainChart();
+}
+
+function setOnchainRange(days, btn) {
+  currentOnchainDays = days;
+  setActiveBtn(1, btn);
+  loadOnchainChart();
+}
+
+// ---------------------------------------------------------------------------
+// Chart 3: valuation score history
+// ---------------------------------------------------------------------------
+
+// Plugin lokal: pita zona valuasi (tanpa dependensi annotation eksternal).
+// Ambang batas mengikuti MarketZone di engine (<=20 / <=35 / 40-70 / >75).
+const scoreZoneBands = {
+  id: 'scoreZoneBands',
+  beforeDatasetsDraw(chart) {
+    const y = chart.scales.y;
+    const { left, right } = chart.chartArea;
+    const bands = [
+      { from: 0, to: 20, color: 'rgba(34,197,94,0.20)', label: 'Deep Capitulation' },
+      { from: 20, to: 35, color: 'rgba(74,222,128,0.15)', label: 'Buy Zone' },
+      { from: 35, to: 75, color: 'rgba(148,163,184,0.10)', label: 'Netral' },
+      { from: 75, to: 100, color: 'rgba(239,68,68,0.20)', label: 'Euphoria' }
+    ];
+    const ctx = chart.ctx;
+    ctx.save();
+    bands.forEach(b => {
+      const yTop = y.getPixelForValue(b.to);
+      const yBot = y.getPixelForValue(b.from);
+      ctx.fillStyle = b.color;
+      ctx.fillRect(left, yTop, right - left, yBot - yTop);
+    });
+    ctx.restore();
+  }
+};
+
+async function loadScoreChart() {
+  if (typeof Chart === 'undefined') return;
+  try {
+    const data = await fetchJSON(`${API}/api/v1/chart/score-history?method=auto&limit=200&step_days=30`);
+    if (!data.ok || !data.points || data.points.length === 0) return;
+
+    const pts = data.points;
+    const labels = pts.map(p => p.date);
+    const scores = pts.map(p => p.valuation_score === null ? null : p.valuation_score);
+
+    const ctx = document.getElementById('scoreChartCanvas').getContext('2d');
+    scoreChartInstance = destroyChart(scoreChartInstance);
+
+    const opts = chartBaseOptions('Skor (0–100)');
+    opts.scales.y.min = 0;
+    opts.scales.y.max = 100;
+    opts.scales.y.ticks.stepSize = 20;
+    opts.plugins.tooltip.callbacks = {
+      label: c => {
+        const p = pts[c.dataIndex] || {};
+        const zone = p.current_zone ? ` — ${p.current_zone}` : '';
+        return `Skor: ${fmtNum(c.parsed.y, 2)}${zone}`;
+      }
+    };
+
+    scoreChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Composite Score',
+          data: scores,
+          borderColor: '#ffd166',
+          backgroundColor: 'rgba(255,209,102,0.18)',
+          borderWidth: 2,
+          pointRadius: 2,
+          pointHoverRadius: 4,
+          fill: true,
+          tension: 0.2,
+          spanGaps: true
+        }]
+      },
+      options: opts,
+      plugins: [scoreZoneBands]
+    });
+  } catch (err) {
+    console.error('loadScoreChart gagal:', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration
+// ---------------------------------------------------------------------------
+
 async function loadAll() {
+  const errBox = document.getElementById('error');
+  errBox.classList.add('hidden');
   try {
     const [val, ind] = await Promise.all([
       fetchJSON(`${API}/api/v1/valuation`),
@@ -293,10 +785,14 @@ async function loadAll() {
     renderValuation(val);
     renderIndicators(ind);
   } catch (e) {
-    document.getElementById('error').textContent = 'Gagal memuat: ' + e.message;
-    document.getElementById('error').classList.remove('hidden');
+    errBox.textContent = 'Gagal memuat data valuasi: ' + e.message;
+    errBox.classList.remove('hidden');
     console.error(e);
+    return;
   }
+  // Muat daftar metrik on-chain dulu (asinkron), lalu chart.
+  await loadOnchainMetrics();
+  await Promise.allSettled([loadPriceChart(), loadOnchainChart(), loadScoreChart()]);
 }
 
 function showDashboard() {
@@ -305,14 +801,17 @@ function showDashboard() {
 }
 
 async function init() {
-  await loadAll();
   showDashboard();
+  await loadAll();
 }
 
 document.getElementById('refreshBtn').addEventListener('click', async () => {
-  document.getElementById('refreshBtn').textContent = 'Memuat…';
+  const btn = document.getElementById('refreshBtn');
+  btn.textContent = 'Memuat…';
+  btn.disabled = true;
   await loadAll();
-  document.getElementById('refreshBtn').textContent = 'Segarkan';
+  btn.textContent = 'Segarkan';
+  btn.disabled = false;
 });
 
 init();

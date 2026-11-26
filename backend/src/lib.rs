@@ -9,3 +9,4 @@ pub mod onchain;
 pub mod intermarket;
 pub mod sync;
 pub mod engine;
+pub mod chart;

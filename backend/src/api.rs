@@ -2,6 +2,11 @@
 //!
 //! Prinsip: tidak ada `unwrap()` pada path runtime. Kegagalan DB/network
 //! dikembalikan sebagai respons JSON terstruktur dengan status code yang tepat.
+use crate::chart::{
+    get_onchain_chart, get_price_chart, get_score_history,
+    list_onchain_metrics,
+    OnchainChartQuery, PriceChartQuery, ScoreHistoryQuery,
+};
 use crate::config::AppConfig;
 use crate::db;
 use crate::engine::loader::LoaderError;
@@ -33,6 +38,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         // Phase 2: Valuation & Indicators API (GET-only, read-only)
         .route("/api/v1/valuation", get(get_valuation))
         .route("/api/v1/indicators", get(get_indicators))
+        // Phase 3: Chart API (read-only real data)
+        .route("/api/v1/chart/price", get(chart_price_handler))
+        .route("/api/v1/chart/onchain", get(chart_onchain_handler))
+        .route(
+            "/api/v1/chart/onchain-metrics",
+            get(chart_onchain_metrics_handler),
+        )
+        .route("/api/v1/chart/score-history", get(chart_score_history_handler))
         // POST-only: operasi ini memicu I/O jaringan ke sumber eksternal.
         .route("/api/v1/bootstrap", post(trigger_bootstrap))
         .route("/api/v1/update", post(trigger_update))
@@ -289,4 +302,77 @@ fn loader_error_response(err: LoaderError) -> Response {
     }
 
     (status, Json(body)).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Chart endpoint handlers (read-only real data)
+// ---------------------------------------------------------------------------
+
+async fn chart_price_handler(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PriceChartQuery>,
+) -> Response {
+    match get_price_chart(&state.pool, query).await {
+        Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "ok": false,
+                "error_code": "chart_price_failed",
+                "error": e.to_string(),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn chart_onchain_handler(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<OnchainChartQuery>,
+) -> Response {
+    match get_onchain_chart(&state.pool, query).await {
+        Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error_code": "chart_onchain_failed",
+                "error": e.to_string(),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn chart_onchain_metrics_handler(State(state): State<Arc<AppState>>) -> Response {
+    match list_onchain_metrics(&state.pool).await {
+        Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "ok": false,
+                "error_code": "chart_onchain_metrics_failed",
+                "error": e.to_string(),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn chart_score_history_handler(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ScoreHistoryQuery>,
+) -> Response {
+    match get_score_history(&state.pool, query, state.cfg.min_required_candles).await {
+        Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "ok": false,
+                "error_code": "chart_score_history_failed",
+                "error": e.to_string(),
+            })),
+        )
+            .into_response(),
+    }
 }

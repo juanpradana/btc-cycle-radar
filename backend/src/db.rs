@@ -7,6 +7,8 @@ use std::time::Duration;
 
 /// Schema SQL di-embed saat compile (tanpa butuh DATABASE_URL di build time).
 const SCHEMA_SQL: &str = include_str!("../migrations/0001_initial_schema.sql");
+const SCHEMA_SQL_2: &str = include_str!("../migrations/0002_score_history.sql");
+const SCHEMA_SQL_3: &str = include_str!("../migrations/0003_score_history_step.sql");
 
 /// Koneksi SQLite pool dengan WAL mode, busy_timeout >= 30s, FK on.
 pub async fn connect(database_url: &str) -> Result<SqlitePool> {
@@ -31,19 +33,42 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     sqlx::raw_sql(SCHEMA_SQL)
         .execute(pool)
         .await
-        .context("apply schema migration")?;
-    set_meta(pool, "schema_version", "0001").await?;
+        .context("apply schema migration 0001")?;
+    sqlx::raw_sql(SCHEMA_SQL_2)
+        .execute(pool)
+        .await
+        .context("apply schema migration 0002")?;
+    // 0003: ALTER TABLE tidak punya IF NOT EXISTS di SQLite — cek dulu kolomnya.
+    let has_step: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('score_history') WHERE name = 'step_days'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    if has_step == 0 {
+        sqlx::raw_sql(SCHEMA_SQL_3)
+            .execute(pool)
+            .await
+            .context("apply schema migration 0003")?;
+    }
+    set_meta(pool, "schema_version", "0003").await?;
     Ok(())
 }
 
 /// Ekstrak path file dari sqlite://... URL (kalau in-memory -> None)
 fn sqlite_file_path(url: &str) -> Option<PathBuf> {
     let url = url.strip_prefix("sqlite:")?;
-    let url = url.strip_prefix("//")?;
+    let mut url = url.strip_prefix("//")?;
     if url.starts_with(":memory:") || url.is_empty() {
         return None;
     }
-    Some(PathBuf::from(url))
+    // Normalisasi Windows: jika URL menghasilkan "/C:/foo", buang slash pembuka
+    if url.starts_with('/') && url.len() > 2 && url.as_bytes()[2] == b':' {
+        url = &url[1..];
+    }
+    // Potong query parameters jika ada (mis. sqlite://foo.db?mode=rwc)
+    let path_str = url.split('?').next().unwrap_or(url);
+    Some(PathBuf::from(path_str))
 }
 
 fn ensure_sqlite_parent_dir(database_url: &str) -> Result<()> {

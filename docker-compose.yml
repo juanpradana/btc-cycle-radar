@@ -1,0 +1,113 @@
+# ---------------------------------------------------------------------------
+# BTC Cycle Radar — Docker Compose (produksi)
+#
+# Mulai cepat:
+#   cp .env.docker.example .env          # opsional: isi API key / port
+#   docker compose up -d --build         # build + jalankan
+#   curl http://localhost:8099/healthz   # cek kesehatan
+#
+# Sinkronisasi harian otomatis (opsional, profil "cron"):
+#   docker compose --profile cron up -d
+#
+# Catatan: volume SQLite WAJIB berada di disk lokal. Jangan arahkan ke
+# NFS/SMB — SQLite + WAL tidak aman di filesystem jaringan.
+# ---------------------------------------------------------------------------
+name: btc-cycle-radar
+
+# --- Nilai bersama untuk service app & sync (YAML anchor) ------------------
+x-app-environment: &app-environment
+  BIND_ADDR: 0.0.0.0:8099
+  DATABASE_URL: sqlite://data/btc_cycle_radar.db
+  BOOTSTRAP_START: ${BOOTSTRAP_START:-2010-07-01}
+  MIN_REQUIRED_CANDLES: ${MIN_REQUIRED_CANDLES:-4500}
+  AUTO_BOOTSTRAP: ${AUTO_BOOTSTRAP:-true}
+  # Semua API key opsional: sistem tetap berfungsi penuh untuk indikator
+  # berbasis OHLCV + CoinMetrics Community tanpa key apapun.
+  BGEOMETRICS_API_KEY: ${BGEOMETRICS_API_KEY:-}
+  BGEOMETRICS_MAX_ENDPOINTS_PER_DAY: ${BGEOMETRICS_MAX_ENDPOINTS_PER_DAY:-8}
+  FRED_API_KEY: ${FRED_API_KEY:-}
+  RUST_LOG: ${RUST_LOG:-btc_cycle_radar=info,sqlx=warn,axum=info,tower_http=info}
+  TZ: ${TZ:-UTC}
+
+x-app-volumes: &app-volumes
+  - btc-data:/app/data
+
+services:
+  # ---------------------------------------------------------------- API server
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: btc-cycle-radar:latest
+    container_name: btc-cycle-radar
+    init: true
+    restart: unless-stopped
+    environment: *app-environment
+    ports:
+      - "${HOST_PORT:-8099}:8099"
+    volumes: *app-volumes
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8099/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 600s
+    # Hardening: rootfs read-only (hanya volume /app/data yang writable),
+    # /tmp sebagai tmpfs, dan tanpa eskalasi privilege.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+
+  # ------------------------------------------- Sinkronisasi harian (opsional)
+  # Menggunakan image & volume yang sama dengan server. Produsen tunggal pada
+  # file SQLite tetap aman karena SQLite dikonfigurasi WAL + busy_timeout 30s.
+  sync:
+    profiles: ["cron"]
+    image: btc-cycle-radar:latest
+    container_name: btc-cycle-radar-sync
+    init: true
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment: *app-environment
+    volumes: *app-volumes
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -u
+        interval="${SYNC_INTERVAL_SECONDS:-86400}"
+        while true; do
+          echo "[sync] $(date -u +%Y-%m-%dT%H:%M:%SZ) mulai sinkronisasi inkremental"
+          /usr/local/bin/btc-cycle-radar sync --incremental \
+            || echo "[sync] gagal — endpoint akan menyajikan data tersimpan dengan is_stale=true, dicoba lagi pada jadwal berikutnya"
+          sleep "$interval"
+        done
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+volumes:
+  btc-data:
+    driver: local

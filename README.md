@@ -34,7 +34,103 @@ cargo run --color never -- bootstrap --verify
 
 ---
 
-## CLI Commands
+## Deploy dengan Docker Compose (siap produksi)
+
+Prasyarat: **Docker Engine 24+** dengan **Docker Compose v2.20+** (BuildKit aktif secara
+default). Tidak perlu memasang Rust, SQLite, atau OpenSSL di host — semuanya di dalam image.
+
+```bash
+git clone https://github.com/juanpradana/btc-cycle-radar.git
+cd btc-cycle-radar
+
+cp .env.docker.example .env      # opsional: atur port, API key, jadwal sync
+docker compose up -d --build     # build image + jalankan server
+
+docker compose ps                # STATUS harus "healthy"
+curl -s http://localhost:8099/healthz
+curl -s http://localhost:8099/api/v1/valuation
+```
+
+Saat pertama kali start, `AUTO_BOOTSTRAP=true` mengunduh riwayat harian 2010 → sekarang
+(±5.900 candle) **sebelum** listener HTTP bind. Karena itu `start_period` healthcheck
+diberi 600 detik; pada koneksi lambat, tunggu sampai status `healthy` sebelum menganggap
+container gagal:
+
+```bash
+docker compose logs -f app
+# ...
+# INFO btc_cycle_radar: === Bootstrap Report ===
+# Candles after: 5975
+# Date range: 2010-07-18 .. 2026-11-25
+# ✅ PASS: > 4500 daily candles
+# INFO btc_cycle_radar: listening on http://0.0.0.0:8099
+```
+
+### Sinkronisasi harian otomatis (opsional)
+
+Service `sync` memakai image & volume yang sama, berjalan sebagai loop harian
+(`SYNC_INTERVAL_SECONDS`, default 86400) dan menjaga API tetap menyajikan data tersimpan
+bila upstream gagal (`is_stale: true`):
+
+```bash
+docker compose --profile cron up -d
+docker compose logs -f sync
+```
+
+Tanpa profil tersebut, sinkronisasi bisa dijalankan manual kapan pun:
+
+```bash
+docker compose exec app btc-cycle-radar sync --incremental
+docker compose exec app btc-cycle-radar bootstrap --verify
+```
+
+### Persistensi & backup
+
+Data disimpan di named volume `btc-cycle-radar_btc-data` (mount ke `/app/data`).
+Volume berada di disk lokal — **jangan** arahkan ke NFS/SMB, SQLite + WAL tidak aman
+di filesystem jaringan.
+
+```bash
+# backup konsisten (sqlite3 .backup, aman saat server berjalan)
+docker compose exec app sh -c \
+  'command -v sqlite3 >/dev/null && sqlite3 /app/data/btc_cycle_radar.db ".backup /app/data/backup.db"' \
+  || docker compose stop app && docker run --rm -v btc-cycle-radar_btc-data:/data \
+       -v "$PWD":/out alpine cp /data/btc_cycle_radar.db /out/btc_cycle_radar.db
+```
+
+Untuk bind mount ke direktori host (mis. `/srv/btc-radar/data`), ganti `volumes:` pada
+`docker-compose.yml` lalu pastikan kepemilikan direktori: `sudo chown -R 10001:10001 /srv/btc-radar/data`
+(container berjalan sebagai UID 10001, bukan root).
+
+### Hardening yang sudah terpasang
+
+- Container berjalan sebagai **UID 10001 non-root**, root filesystem `read_only: true`,
+  hanya `/app/data` (volume) dan `/tmp` (tmpfs) yang writable.
+- `no-new-privileges: true`, `init: true`, `restart: unless-stopped`.
+- Log `json-file` dibatasi `max-size: 10m`, `max-file: 3`.
+- Limit resource default: `2 CPU / 1 GB` untuk API, `1 CPU / 512 MB` untuk sync —
+  sesuaikan di `deploy.resources.limits` bila host lebih kecil.
+- Tidak ada kredensial di dalam image: API key hanya masuk lewat environment saat runtime.
+
+### Update & rebuild
+
+```bash
+git pull
+docker compose up -d --build     # build ulang, container diganti tanpa kehilangan volume
+docker image prune -f            # bersihkan image lama
+```
+
+### Troubleshooting
+
+| Gejala | Penyebab & solusi |
+|---|---|
+| `unhealthy` pada 10 menit pertama | Bootstrap awal masih mengunduh riwayat. Cek `docker compose logs -f app`; jangan hentikan container. |
+| `permission denied` menulis DB | Bind mount milik root. `sudo chown -R 10001:10001 <dir-host>`. |
+| `port is already allocated` | Ubah `HOST_PORT` di `.env`, lalu `docker compose up -d`. |
+| `/api/v1/valuation` → 503 | DB belum berisi candle (bootstrap gagal/masih jalan) atau tanggal `as_of` di luar rentang data. Cek `docker compose exec app btc-cycle-radar bootstrap --verify`. |
+| Data on-chain basi > 7 hari | Tier gratis BGeometrics delay ~7 hari; isi `BGEOMETRICS_API_KEY` untuk data lebih segar. UI menandai `is_stale: true` secara transparan. |
+
+---
 
 | Perintah | Deskripsi |
 |---|---|

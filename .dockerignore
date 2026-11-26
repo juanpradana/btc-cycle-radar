@@ -1,0 +1,42 @@
+# Konteks build Docker harus kecil dan bebas rahasia.
+# Yang dibutuhkan build hanya: backend/Cargo.toml, Cargo.lock, backend/src,
+# backend/migrations.
+
+# Version control & metadata repo
+.git
+.gitattributes
+.github
+
+# Artefak build Rust (bisa ratusan MB)
+target
+**/target
+backend/target
+
+# Database lokal, WAL/SHM, dan backup — data runtime, bukan bagian image
+*.db
+*.db-shm
+*.db-wal
+*.db.bak*
+*.backup*
+backend/data
+data
+
+# Rahasia: jangan pernah masuk konteks build
+.env
+.env.*
+*.key
+*.pem
+
+# Log & dump
+*.log
+*.err
+**/*.log
+
+# Berkas yang tidak dipakai build
+Dockerfile
+docker-compose*.yml
+.dockerignore
+README.md
+docs
+node_modules
+frontend

@@ -16,7 +16,16 @@ tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate"] }
 
 # http + parsing
-reqwest = { version = "0.12", features = ["json", "gzip", "brotli"] }
+# TLS memakai rustls (bukan native-tls/OpenSSL) supaya image container tidak
+# butuh libssl: build & runtime cukup ca-certificates, dan binary tetap portabel.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "gzip",
+    "brotli",
+    "charset",
+    "http2",
+    "rustls-tls",
+] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 

@@ -29,6 +29,7 @@ x-app-environment: &app-environment
   FRED_API_KEY: ${FRED_API_KEY:-}
   RUST_LOG: ${RUST_LOG:-btc_cycle_radar=info,sqlx=warn,axum=info,tower_http=info}
   TZ: ${TZ:-UTC}
+  SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-86400}
 
 x-app-volumes: &app-volumes
   - btc-data:/app/data
@@ -89,12 +90,12 @@ services:
     command:
       - |
         set -u
-        interval="${SYNC_INTERVAL_SECONDS:-86400}"
+        interval="$${SYNC_INTERVAL_SECONDS:-86400}"
         while true; do
-          echo "[sync] $(date -u +%Y-%m-%dT%H:%M:%SZ) mulai sinkronisasi inkremental"
+          echo "[sync] $$(date -u +%Y-%m-%dT%H:%M:%SZ) mulai sinkronisasi inkremental"
           /usr/local/bin/btc-cycle-radar sync --incremental \
             || echo "[sync] gagal — endpoint akan menyajikan data tersimpan dengan is_stale=true, dicoba lagi pada jadwal berikutnya"
-          sleep "$interval"
+          sleep "$$interval"
         done
     healthcheck:
       disable: true

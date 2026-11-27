@@ -564,7 +564,14 @@ pub async fn sync_intermarket(
     }
 
     // --- GSPC: FRED SP500 primary ---
-    let fred = crate::intermarket::fred::FredClient::default_client(http.clone());
+    let fred_client = match crate::intermarket::fred::FredClient::make_client() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("failed to create reqwest client for FRED: {e}");
+            http.clone()
+        }
+    };
+    let fred = crate::intermarket::fred::FredClient::default_client(fred_client);
     let spx_result = if full_history {
         fred.fetch_and_save_full_history(pool).await
     } else {

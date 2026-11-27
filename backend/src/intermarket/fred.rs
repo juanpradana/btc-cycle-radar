@@ -69,6 +69,16 @@ impl FredClient {
         Self::new(client, FRED_BASE.to_string(), SP500_SERIES_ID.to_string())
     }
 
+    /// Create a reqwest Client with a User-Agent that FRED's WAF accepts.
+    /// Empirically: "curl/8.5.0" works; default reqwest (no UA) and browser UAs stall.
+    pub fn make_client() -> Result<Client> {
+        Client::builder()
+            .user_agent("curl/8.5.0")
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .context("build reqwest client for FRED")
+    }
+
     /// Fetch FULL history (tanpa parameter `cosd` = sejak awal series).
     pub async fn fetch_and_save_full_history(&self, pool: &SqlitePool) -> Result<usize> {
         let url = format!("{}?id={}", self.base_url, self.series_id);
